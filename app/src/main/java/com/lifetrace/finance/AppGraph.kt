@@ -15,7 +15,7 @@ class AppGraph private constructor(context: Context) {
     val settings = SettingsStore(app)
     val db = FinanceDatabase.get(app)
     val diagnostics = Diagnostics(db.diagnosticDao())
-    val api = LifeTraceApi { settings.baseUrl }
+    val api = LifeTraceApi(baseUrlProvider = { settings.baseUrl })
     val tokenStore = SecureTokenStore(app)
     val auth = AuthManager(app, api, tokenStore)
     val finance = FinanceRepository(db, auth.deviceId)
