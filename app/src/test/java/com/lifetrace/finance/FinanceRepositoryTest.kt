@@ -12,8 +12,11 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class FinanceRepositoryTest {
     private lateinit var db: FinanceDatabase
@@ -32,8 +35,9 @@ class FinanceRepositoryTest {
         val initial = db.syncDao().pendingCount().first()
         val account = repo.accounts(profile.id).first().first()
         val category = repo.categories(profile.id).first().first { it.categoryType == "expense" }
-        repo.createTransaction(profile.id, TransactionType.EXPENSE, 2580, account.id, categoryId = category.id, merchant = "Coffee")
-        assertEquals(1, repo.transactions(profile.id).first().size)
+        repo.createTransaction(profile.id, TransactionType.EXPENSE, 2580, account.id, categoryId = category.id, merchant = "Coffee", note = "morning")
+        val transaction = repo.transactions(profile.id).first().single()
+        assertEquals("morning", transaction.note)
         assertEquals(initial + 1, db.syncDao().pendingCount().first())
     }
 
