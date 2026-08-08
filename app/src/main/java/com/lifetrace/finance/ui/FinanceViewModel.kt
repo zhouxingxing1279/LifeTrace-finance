@@ -54,15 +54,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun save(
-        type: TransactionType,
-        amountText: String,
-        accountId: String?,
-        toAccountId: String? = null,
-        categoryId: String? = null,
-        merchant: String? = null,
-        note: String? = null,
-    ) {
+    fun save(type: TransactionType, amountText: String, accountId: String?, toAccountId: String? = null, categoryId: String? = null, merchant: String? = null, note: String? = null) {
         val amount = MoneyParser.parseCents(amountText)
         if (amount == null || amount <= 0) { _message.value = UiMessage("请输入有效金额", true); return }
         val profileId = _profile.value?.id ?: return
@@ -89,7 +81,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             .onFailure { _message.value = UiMessage(it.message ?: "删除失败", true) }
     }
 
-    fun confirm(id: String) = viewModelScope.launch { repo.confirmCandidate(id); SyncScheduler.scheduleNow(getApplication()) }
+    fun confirm(id: String, categoryId: String? = null) = viewModelScope.launch { repo.confirmCandidate(id, categoryId); SyncScheduler.scheduleNow(getApplication()) }
     fun ignore(id: String) = viewModelScope.launch { repo.ignoreCandidate(id); SyncScheduler.scheduleNow(getApplication()) }
 
     fun addAccount(name: String, type: String) = viewModelScope.launch {
@@ -133,9 +125,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun syncNow() = SyncScheduler.scheduleNow(getApplication())
-    fun snapshot() = viewModelScope.launch {
-        graph.syncEngine.snapshot().onFailure { _message.value = UiMessage("Snapshot 失败：${it.message}", true) }
-    }
+    fun snapshot() = viewModelScope.launch { graph.syncEngine.snapshot().onFailure { _message.value = UiMessage("Snapshot 失败：${it.message}", true) } }
     fun setBaseUrl(value: String) {
         runCatching { graph.settings.baseUrl = value }
             .onSuccess { _message.value = UiMessage("服务器地址已保存") }
@@ -149,14 +139,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun shareDiagnostics() {
-        val body = diagnostics.value.joinToString("\n") { event ->
-            "${event.timestamp} ${event.level} ${event.component}/${event.eventCode} ${event.message}"
-        }.ifBlank { "No diagnostic events." }
-        val intent = Intent(Intent.ACTION_SEND)
-            .setType("text/plain")
+        val body = diagnostics.value.joinToString("\n") { event -> "${event.timestamp} ${event.level} ${event.component}/${event.eventCode} ${event.message}" }
+            .ifBlank { "No diagnostic events." }
+        val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
             .putExtra(Intent.EXTRA_SUBJECT, "LifeTrace Finance diagnostics")
-            .putExtra(Intent.EXTRA_TEXT, body)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra(Intent.EXTRA_TEXT, body).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         getApplication<Application>().startActivity(Intent.createChooser(intent, "导出脱敏诊断日志").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 

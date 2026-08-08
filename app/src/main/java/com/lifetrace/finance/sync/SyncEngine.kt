@@ -33,15 +33,18 @@ class SyncEngine(
             diagnostics.event("SYNC", "SYNC_START", "sync cycle started", correlationId = correlation)
             if (auth.accessToken() == null) return@runCatching
             loadCapabilities(correlation)
-            if (sync.state()?.snapshotRequired == true) snapshotInternal(correlation)
+            if (sync.state()?.snapshotRequired == true || sync.snapshotProgress() != null) snapshotInternal(correlation)
             push(correlation)
             pull(correlation)
             diagnostics.event("SYNC", "SYNC_SUCCESS", "sync cycle completed", correlationId = correlation)
         }.onFailure {
             saveLastError(it)
             diagnostics.event(
-                "SYNC", "SYNC_FAILED", "${it.javaClass.simpleName}: ${it.message ?: "unknown"}",
-                "ERROR", correlation,
+                "SYNC",
+                "SYNC_FAILED",
+                "${it.javaClass.simpleName}: ${it.message ?: "unknown"}",
+                "ERROR",
+                correlation,
             )
         }
     }
@@ -52,10 +55,19 @@ class SyncEngine(
             val minimumSchema = value.optInt("minimumSchemaVersion", LifeTraceContract.SCHEMA_VERSION)
             require(protocol == LifeTraceContract.PROTOCOL_VERSION) { "unsupported sync protocol $protocol" }
             require(LifeTraceContract.SCHEMA_VERSION >= minimumSchema) { "client schema is too old" }
-            dynamicPushBatchSize = minOf(dynamicPushBatchSize, value.optInt("maximumPushBatchSize", dynamicPushBatchSize).coerceAtLeast(1))
+            dynamicPushBatchSize = minOf(
+                dynamicPushBatchSize,
+                value.optInt("maximumPushBatchSize", dynamicPushBatchSize).coerceAtLeast(1),
+            )
             pullBatchSize = value.optInt("maximumPullBatchSize", pullBatchSize).coerceIn(1, 500)
         }.onFailure {
-            diagnostics.event("SYNC", "CAPABILITIES_FAILED", it.message ?: "capabilities failed", "WARN", correlation)
+            diagnostics.event(
+                "SYNC",
+                "CAPABILITIES_FAILED",
+                it.message ?: "capabilities failed",
+                "WARN",
+                correlation,
+            )
         }
     }
 
@@ -79,12 +91,17 @@ class SyncEngine(
                                 .put("clientModifiedAt", outbox.clientModifiedAt)
                                 .put("payload", outbox.payloadJson?.let(::JSONObject) ?: JSONObject.NULL)
                                 .put("atomicGroupId", outbox.atomicGroupId ?: JSONObject.NULL)
-                                .put("dependencies", JSONArray(outbox.dependenciesJson))
+                                .put("dependencies", JSONArray(outbox.dependenciesJson)),
                         )
                     }
                 })
             try {
-                diagnostics.event("SYNC_PUSH", "HTTP_REQUEST_START", "push batch size=${batch.size}", correlationId = correlation)
+                diagnostics.event(
+                    "SYNC_PUSH",
+                    "HTTP_REQUEST_START",
+                    "push batch size=${batch.size}",
+                    correlationId = correlation,
+                )
                 val response = withAuthorizedToken { api.syncPush(it, request) }
                 applyPushResults(batch, response)
                 dynamicPushBatchSize = minOf(50, dynamicPushBatchSize + 5)
@@ -102,7 +119,13 @@ class SyncEngine(
                     }
                     else -> {
                         val delay = SyncPolicy.retryDelayMillis(batch.first().attempts)
-                        batch.forEach { sync.retry(it.changeId, System.currentTimeMillis() + delay, "HTTP ${error.status}") }
+                        batch.forEach {
+                            sync.retry(
+                                it.changeId,
+                                System.currentTimeMillis() + delay,
+                                "HTTP ${error.status}",
+                            )
+                        }
                         throw error
                     }
                 }
@@ -130,11 +153,13 @@ class SyncEngine(
                             entityType = original.entityType,
                             entityId = original.entityId,
                             localPayload = original.payloadJson,
-                            remotePayload = result.opt("serverEntity")?.takeUnless { it === JSONObject.NULL }?.toString(),
+                            remotePayload = result.opt("serverEntity")
+                                ?.takeUnless { it === JSONObject.NULL }
+                                ?.toString(),
                             baseServerVersion = result.getString("clientBaseServerVersion"),
                             remoteServerVersion = result.getString("currentServerVersion"),
                             createdAt = Instant.now().toString(),
-                        )
+                        ),
                     )
                     sync.ack(changeId)
                 }
@@ -176,7 +201,14 @@ class SyncEngine(
                 for (i in 0 until changes.length()) applyServerChange(changes.getJSONObject(i))
                 cursor = response.getString("nextCursor")
                 val previous = sync.state() ?: SyncStateEntity()
-                sync.saveState(previous.copy(cursor = cursor, lastPullAt = Instant.now().toString(), lastError = null, snapshotRequired = false))
+                sync.saveState(
+                    previous.copy(
+                        cursor = cursor,
+                        lastPullAt = Instant.now().toString(),
+                        lastError = null,
+                        snapshotRequired = false,
+                    ),
+                )
             }
             hasMore = response.getBoolean("hasMore")
         } while (hasMore)
@@ -185,14 +217,35 @@ class SyncEngine(
     suspend fun snapshot(): Result<Unit> = withContext(Dispatchers.IO) {
         val correlation = UUID.randomUUID().toString()
         runCatching { snapshotInternal(correlation) }
-            .onFailure { saveLastError(it); diagnostics.event("SYNC_SNAPSHOT", "SNAPSHOT_FAILED", it.message ?: "snapshot failed", "ERROR", correlation) }
+            .onFailure {
+                saveLastError(it)
+                diagnostics.event(
+                    "SYNC_SNAPSHOT",
+                    "SNAPSHOT_FAILED",
+                    it.message ?: "snapshot failed",
+                    "ERROR",
+                    correlation,
+                )
+            }
     }
 
+    /**
+     * Snapshot pages are first persisted into staging. The next page token and snapshot id are
+     * committed with each page, so a process death resumes from the last durable page instead of
+     * applying a half-snapshot. Only a completely downloaded snapshot is applied to business data.
+     */
     private suspend fun snapshotInternal(correlation: String) {
         require(auth.accessToken() != null) { "not authenticated" }
-        var snapshotId: String? = null
-        var pageToken: String? = null
-        var snapshotCursor: String? = null
+        var progress = sync.snapshotProgress()
+        if (progress?.downloadComplete == true) {
+            applyStagedSnapshot(progress.snapshotCursor, correlation)
+            return
+        }
+
+        var snapshotId = progress?.snapshotId
+        var pageToken = progress?.nextPageToken
+        var snapshotCursor = progress?.snapshotCursor
+
         do {
             val request = JSONObject()
                 .put("requestId", UUID.randomUUID().toString())
@@ -201,21 +254,94 @@ class SyncEngine(
                 .put("pageToken", pageToken ?: JSONObject.NULL)
                 .put("entityTypes", JSONArray(LifeTraceContract.FINANCE_ENTITY_TYPES.toList()))
                 .put("pageSize", 200)
-            diagnostics.event("SYNC_SNAPSHOT", "HTTP_REQUEST_START", "snapshot page", correlationId = correlation)
+
+            diagnostics.event(
+                "SYNC_SNAPSHOT",
+                if (progress == null) "SNAPSHOT_PAGE_START" else "SNAPSHOT_PAGE_RESUME",
+                "snapshot page request",
+                correlationId = correlation,
+            )
+
             val response = withAuthorizedToken { api.snapshot(it, request) }
-            snapshotId = response.getString("snapshotId")
-            snapshotCursor = response.getString("snapshotCursor")
-            val items = response.getJSONArray("items")
-            db.withTransaction {
-                for (i in 0 until items.length()) applySnapshot(items.getJSONObject(i))
-            }
-            pageToken = response.opt("nextPageToken")
+            val responseSnapshotId = response.getString("snapshotId")
+            val responseCursor = response.getString("snapshotCursor")
+            val nextToken = response.opt("nextPageToken")
                 ?.takeUnless { it === JSONObject.NULL }
                 ?.toString()
                 ?.takeIf(String::isNotBlank)
+            val items = response.getJSONArray("items")
+            val now = Instant.now().toString()
+
+            db.withTransaction {
+                for (i in 0 until items.length()) {
+                    val item = items.getJSONObject(i)
+                    val payload = item.getJSONObject("payload")
+                    val entityId = payload.getJSONObject("meta").getString("id")
+                    sync.stageSnapshot(
+                        SnapshotStagingEntity(
+                            entityType = item.getString("entityType"),
+                            entityId = entityId,
+                            serverVersion = item.getString("serverVersion"),
+                            payloadJson = payload.toString(),
+                        ),
+                    )
+                }
+                sync.saveSnapshotProgress(
+                    SnapshotProgressEntity(
+                        snapshotId = responseSnapshotId,
+                        nextPageToken = nextToken,
+                        snapshotCursor = responseCursor,
+                        downloadComplete = nextToken == null,
+                        updatedAt = now,
+                    ),
+                )
+            }
+
+            snapshotId = responseSnapshotId
+            pageToken = nextToken
+            snapshotCursor = responseCursor
+            progress = sync.snapshotProgress()
         } while (pageToken != null)
-        val previous = sync.state() ?: SyncStateEntity()
-        sync.saveState(previous.copy(cursor = snapshotCursor, snapshotRequired = false, lastPullAt = Instant.now().toString(), lastError = null))
+
+        applyStagedSnapshot(requireNotNull(snapshotCursor), correlation)
+    }
+
+    private suspend fun applyStagedSnapshot(snapshotCursor: String, correlation: String) {
+        val profileId = activeProfileId()
+        val staged = sync.stagedSnapshot()
+        var skippedLocalChanges = 0
+        db.withTransaction {
+            for (item in staged) {
+                if (sync.pendingForEntity(item.entityType, item.entityId) > 0) {
+                    skippedLocalChanges++
+                    continue
+                }
+                RemoteMapper.upsert(
+                    finance,
+                    item.entityType,
+                    JSONObject(item.payloadJson),
+                    item.serverVersion,
+                    profileId,
+                )
+            }
+            val previous = sync.state() ?: SyncStateEntity()
+            sync.saveState(
+                previous.copy(
+                    cursor = snapshotCursor,
+                    snapshotRequired = false,
+                    lastPullAt = Instant.now().toString(),
+                    lastError = null,
+                ),
+            )
+            sync.clearSnapshotStaging()
+            sync.clearSnapshotProgress()
+        }
+        diagnostics.event(
+            "SYNC_SNAPSHOT",
+            "SNAPSHOT_APPLIED",
+            "snapshot applied items=${staged.size} skippedLocalPending=$skippedLocalChanges",
+            correlationId = correlation,
+        )
     }
 
     /** Conflict resolution is explicit; there is no implicit last-write-wins. */
@@ -233,7 +359,7 @@ class SyncEngine(
                         baseServerVersion = conflict.remoteServerVersion,
                         clientModifiedAt = Instant.now().toString(),
                         payloadJson = payload,
-                    )
+                    ),
                 )
                 sync.markConflict(conflictId, "local_requeued")
             }
@@ -246,9 +372,20 @@ class SyncEngine(
             val profileId = activeProfileId()
             db.withTransaction {
                 if (conflict.remotePayload == null) {
-                    remoteDelete(conflict.entityType, conflict.entityId, Instant.now().toString(), conflict.remoteServerVersion)
+                    remoteDelete(
+                        conflict.entityType,
+                        conflict.entityId,
+                        Instant.now().toString(),
+                        conflict.remoteServerVersion,
+                    )
                 } else {
-                    RemoteMapper.upsert(finance, conflict.entityType, JSONObject(conflict.remotePayload), conflict.remoteServerVersion, profileId)
+                    RemoteMapper.upsert(
+                        finance,
+                        conflict.entityType,
+                        JSONObject(conflict.remotePayload),
+                        conflict.remoteServerVersion,
+                        profileId,
+                    )
                 }
                 sync.markConflict(conflictId, "remote_applied")
             }
@@ -260,21 +397,20 @@ class SyncEngine(
         val entityId = change.getString("entityId")
         val version = change.getString("serverVersion")
         if (change.getString("operation") == "delete") {
-            val at = change.optJSONObject("tombstone")?.optString("deletedAt")?.takeIf(String::isNotBlank) ?: Instant.now().toString()
+            val at = change.optJSONObject("tombstone")
+                ?.optString("deletedAt")
+                ?.takeIf(String::isNotBlank)
+                ?: Instant.now().toString()
             remoteDelete(entityType, entityId, at, version)
         } else {
-            RemoteMapper.upsert(finance, entityType, change.getJSONObject("payload"), version, activeProfileId())
+            RemoteMapper.upsert(
+                finance,
+                entityType,
+                change.getJSONObject("payload"),
+                version,
+                activeProfileId(),
+            )
         }
-    }
-
-    private suspend fun applySnapshot(item: JSONObject) {
-        RemoteMapper.upsert(
-            finance,
-            item.getString("entityType"),
-            item.getJSONObject("payload"),
-            item.getString("serverVersion"),
-            activeProfileId(),
-        )
     }
 
     private suspend fun remoteDelete(entityType: String, id: String, deletedAt: String, version: String) = when (entityType) {
@@ -330,49 +466,100 @@ private object RemoteMapper {
     ) {
         val meta = payload.getJSONObject("meta")
         fun nullable(key: String): String? = payload.opt(key)?.takeUnless { it === JSONObject.NULL }?.toString()
-        // Cloud ownership comes from the authenticated principal. Wire meta.userId
-        // must never replace this device's stable LocalProfileId.
+        // Cloud ownership comes from the authenticated principal. Wire meta.userId must never
+        // replace this device's stable LocalProfileId.
         val createdAt = meta.getString("createdAt")
         val updatedAt = meta.getString("updatedAt")
         val deletedAt = meta.opt("deletedAt")?.takeUnless { it === JSONObject.NULL }?.toString()
         when (entityType) {
             "finance.transaction" -> dao.upsertTransaction(
                 TransactionEntity(
-                    id = meta.getString("id"), localProfileId = localProfileId,
-                    transactionType = payload.getString("transactionType"), amountCents = payload.getLong("amountCents"),
-                    currency = payload.optString("currency", "CNY"), accountId = nullable("accountId"),
-                    toAccountId = nullable("toAccountId"), categoryId = nullable("categoryId"), counterparty = nullable("counterparty"),
-                    merchant = nullable("merchant"), item = nullable("item"), note = nullable("note"), occurredAt = payload.getString("occurredAt"),
-                    localDate = payload.getString("localDate"), status = payload.getString("status"), sourceType = payload.getString("sourceType"),
-                    externalTransactionId = nullable("externalTransactionId"), createdAt = createdAt, updatedAt = updatedAt, deletedAt = deletedAt,
-                    localVersion = meta.optLong("localVersion", 1), serverVersion = serverVersion,
-                    modifiedByDevice = meta.opt("modifiedByDevice")?.takeUnless { it === JSONObject.NULL }?.toString(),
-                )
+                    id = meta.getString("id"),
+                    localProfileId = localProfileId,
+                    transactionType = payload.getString("transactionType"),
+                    amountCents = payload.getLong("amountCents"),
+                    currency = payload.optString("currency", "CNY"),
+                    accountId = nullable("accountId"),
+                    toAccountId = nullable("toAccountId"),
+                    categoryId = nullable("categoryId"),
+                    counterparty = nullable("counterparty"),
+                    merchant = nullable("merchant"),
+                    item = nullable("item"),
+                    note = nullable("note"),
+                    occurredAt = payload.getString("occurredAt"),
+                    localDate = payload.getString("localDate"),
+                    status = payload.getString("status"),
+                    sourceType = payload.getString("sourceType"),
+                    externalTransactionId = nullable("externalTransactionId"),
+                    createdAt = createdAt,
+                    updatedAt = updatedAt,
+                    deletedAt = deletedAt,
+                    localVersion = meta.optLong("localVersion", 1),
+                    serverVersion = serverVersion,
+                    modifiedByDevice = meta.opt("modifiedByDevice")
+                        ?.takeUnless { it === JSONObject.NULL }
+                        ?.toString(),
+                ),
             )
             "finance.account" -> dao.upsertAccount(
                 AccountEntity(
-                    id = meta.getString("id"), localProfileId = localProfileId, name = payload.getString("name"), accountType = payload.getString("accountType"),
-                    openingBalanceCents = payload.opt("openingBalanceCents")?.takeUnless { it === JSONObject.NULL }?.toString()?.toLongOrNull(),
-                    balanceAt = nullable("balanceAt"), last4 = nullable("last4"), color = payload.optString("color", "#4F6BED"),
-                    icon = payload.optString("icon", "wallet"), isArchived = payload.optBoolean("isArchived"), currency = payload.optString("currency", "CNY"),
-                    createdAt = createdAt, updatedAt = updatedAt, deletedAt = deletedAt, localVersion = meta.optLong("localVersion", 1), serverVersion = serverVersion,
-                )
+                    id = meta.getString("id"),
+                    localProfileId = localProfileId,
+                    name = payload.getString("name"),
+                    accountType = payload.getString("accountType"),
+                    openingBalanceCents = payload.opt("openingBalanceCents")
+                        ?.takeUnless { it === JSONObject.NULL }
+                        ?.toString()
+                        ?.toLongOrNull(),
+                    balanceAt = nullable("balanceAt"),
+                    last4 = nullable("last4"),
+                    color = payload.optString("color", "#4F6BED"),
+                    icon = payload.optString("icon", "wallet"),
+                    isArchived = payload.optBoolean("isArchived"),
+                    currency = payload.optString("currency", "CNY"),
+                    createdAt = createdAt,
+                    updatedAt = updatedAt,
+                    deletedAt = deletedAt,
+                    localVersion = meta.optLong("localVersion", 1),
+                    serverVersion = serverVersion,
+                ),
             )
             "finance.category" -> dao.upsertCategory(
                 CategoryEntity(
-                    id = meta.getString("id"), localProfileId = localProfileId, name = payload.getString("name"), categoryType = payload.getString("categoryType"),
-                    parentId = nullable("parentId"), icon = nullable("icon"), color = nullable("color"), isSystem = payload.optBoolean("isSystem"),
-                    isArchived = payload.optBoolean("isArchived"), createdAt = createdAt, updatedAt = updatedAt, deletedAt = deletedAt,
-                    localVersion = meta.optLong("localVersion", 1), serverVersion = serverVersion,
-                )
+                    id = meta.getString("id"),
+                    localProfileId = localProfileId,
+                    name = payload.getString("name"),
+                    categoryType = payload.getString("categoryType"),
+                    parentId = nullable("parentId"),
+                    icon = nullable("icon"),
+                    color = nullable("color"),
+                    isSystem = payload.optBoolean("isSystem"),
+                    isArchived = payload.optBoolean("isArchived"),
+                    createdAt = createdAt,
+                    updatedAt = updatedAt,
+                    deletedAt = deletedAt,
+                    localVersion = meta.optLong("localVersion", 1),
+                    serverVersion = serverVersion,
+                ),
             )
             "finance.transaction_evidence" -> dao.upsertEvidence(
                 TransactionEvidenceEntity(
-                    id = meta.getString("id"), localProfileId = localProfileId, transactionId = payload.getString("transactionId"),
-                    sourceType = payload.getString("sourceType"), sourceId = nullable("sourceId"), externalTransactionId = nullable("externalTransactionId"),
-                    confidence = payload.opt("confidence")?.takeUnless { it === JSONObject.NULL }?.toString()?.toDoubleOrNull(),
-                    createdAt = createdAt, updatedAt = updatedAt, deletedAt = deletedAt, localVersion = meta.optLong("localVersion", 1), serverVersion = serverVersion,
-                )
+                    id = meta.getString("id"),
+                    localProfileId = localProfileId,
+                    transactionId = payload.getString("transactionId"),
+                    sourceType = payload.getString("sourceType"),
+                    sourceId = nullable("sourceId"),
+                    externalTransactionId = nullable("externalTransactionId"),
+                    confidence = payload.opt("confidence")
+                        ?.takeUnless { it === JSONObject.NULL }
+                        ?.toString()
+                        ?.toDoubleOrNull(),
+                    createdAt = createdAt,
+                    updatedAt = updatedAt,
+                    deletedAt = deletedAt,
+                    localVersion = meta.optLong("localVersion", 1),
+                    serverVersion = serverVersion,
+                ),
             )
         }
     }

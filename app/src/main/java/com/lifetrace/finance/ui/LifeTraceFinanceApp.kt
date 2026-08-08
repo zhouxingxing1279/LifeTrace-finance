@@ -14,7 +14,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -32,12 +35,7 @@ private enum class Destination(val label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LifeTraceFinanceApp(
-    vm: FinanceViewModel,
-    initialDestination: String,
-    sharedText: String?,
-    initialTransactionType: String? = null,
-) {
+fun LifeTraceFinanceApp(vm: FinanceViewModel, initialDestination: String, sharedText: String?, initialTransactionType: String? = null) {
     var destination by remember { mutableStateOf(initialDestination.toDestination()) }
     val message by vm.message.collectAsState()
     val inbox by vm.inbox.collectAsState()
@@ -96,13 +94,14 @@ private fun Destination.icon() = when (this) {
 private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialTransactionType: String?) {
     val accounts by vm.accounts.collectAsState()
     val categories by vm.categories.collectAsState()
+    val amountFocus = remember { FocusRequester() }
     var type by remember(initialTransactionType) {
         mutableStateOf(
             when (initialTransactionType) {
                 "income" -> TransactionType.INCOME
                 "transfer" -> TransactionType.TRANSFER
                 else -> TransactionType.EXPENSE
-            }
+            },
         )
     }
     var amount by remember(sharedText) { mutableStateOf(sharedText?.let(::extractSharedAmount).orEmpty()) }
@@ -111,6 +110,8 @@ private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialT
     var accountId by remember(accounts) { mutableStateOf(accounts.firstOrNull()?.id) }
     var toAccountId by remember { mutableStateOf<String?>(null) }
     var categoryId by remember(type, categories) { mutableStateOf(categories.firstOrNull { it.categoryType == type.wire }?.id) }
+
+    LaunchedEffect(Unit) { amountFocus.requestFocus() }
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -129,7 +130,7 @@ private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialT
             OutlinedTextField(
                 value = amount,
                 onValueChange = { amount = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().focusRequester(amountFocus).testTag("quick_amount"),
                 label = { Text("金额") },
                 prefix = { Text("¥") },
                 singleLine = true,
@@ -151,7 +152,7 @@ private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialT
                     vm.save(type, amount, accountId, toAccountId, categoryId, merchant.ifBlank { null }, note.ifBlank { null })
                     amount = ""; merchant = ""; note = ""
                 },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp).testTag("quick_save"),
                 enabled = accounts.isNotEmpty(),
             ) { Text("保存") }
         }
@@ -168,14 +169,7 @@ private fun extractSharedAmount(text: String): String =
     Regex("(?:￥|¥)?\\s*([0-9]+(?:\\.[0-9]{1,2})?)\\s*元?").find(text)?.groupValues?.getOrNull(1).orEmpty()
 
 @Composable
-private fun <T> Selector(
-    label: String,
-    values: List<T>,
-    selected: String?,
-    id: (T) -> String,
-    title: (T) -> String,
-    onSelect: (String) -> Unit,
-) {
+private fun <T> Selector(label: String, values: List<T>, selected: String?, id: (T) -> String, title: (T) -> String, onSelect: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
@@ -183,9 +177,7 @@ private fun <T> Selector(
             Spacer(Modifier.weight(1f)); Icon(Icons.Default.ArrowDropDown, null)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            values.forEach { value ->
-                DropdownMenuItem(text = { Text(title(value)) }, onClick = { onSelect(id(value)); open = false })
-            }
+            values.forEach { value -> DropdownMenuItem(text = { Text(title(value)) }, onClick = { onSelect(id(value)); open = false }) }
         }
     }
 }
@@ -201,9 +193,13 @@ private fun TransactionsScreen(vm: FinanceViewModel) {
         if (rows.isEmpty()) item { EmptyHint("暂无账单") }
     }
     editing?.let { item ->
-        EditTransactionDialog(item, categories, onDismiss = { editing = null }, onSave = { amount, categoryId, merchant, note ->
-            vm.updateTransaction(item.id, amount, categoryId, merchant, note); editing = null
-        }, onDelete = { vm.deleteTransaction(item.id); editing = null })
+        EditTransactionDialog(
+            item,
+            categories,
+            onDismiss = { editing = null },
+            onSave = { amount, categoryId, merchant, note -> vm.updateTransaction(item.id, amount, categoryId, merchant, note); editing = null },
+            onDelete = { vm.deleteTransaction(item.id); editing = null },
+        )
     }
 }
 
@@ -221,13 +217,7 @@ private fun TransactionRow(item: TransactionEntity, onClick: () -> Unit) {
 }
 
 @Composable
-private fun EditTransactionDialog(
-    item: TransactionEntity,
-    categories: List<CategoryEntity>,
-    onDismiss: () -> Unit,
-    onSave: (String, String?, String?, String?) -> Unit,
-    onDelete: () -> Unit,
-) {
+private fun EditTransactionDialog(item: TransactionEntity, categories: List<CategoryEntity>, onDismiss: () -> Unit, onSave: (String, String?, String?, String?) -> Unit, onDelete: () -> Unit) {
     var amount by remember { mutableStateOf(MoneyParser.formatPlain(item.amountCents)) }
     var merchant by remember { mutableStateOf(item.merchant.orEmpty()) }
     var note by remember { mutableStateOf(item.note.orEmpty()) }
@@ -252,21 +242,31 @@ private fun EditTransactionDialog(
 @Composable
 private fun InboxScreen(vm: FinanceViewModel) {
     val rows by vm.inbox.collectAsState()
+    val categories by vm.categories.collectAsState()
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Text("待确认箱", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
-        items(rows, key = { it.id }) { item ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row { Text(item.merchant ?: "自动捕获", Modifier.weight(1f), fontWeight = FontWeight.Medium); Text(MoneyParser.formatCny(item.amountCents), fontWeight = FontWeight.Bold) }
-                    Text("${item.sourceType} · ${item.localDate} · ${item.status}", style = MaterialTheme.typography.bodySmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { vm.confirm(item.id) }) { Text("确认") }
-                        OutlinedButton(onClick = { vm.ignore(item.id) }) { Text("忽略") }
-                    }
-                }
+        items(rows, key = { it.id }) { item -> CandidateCard(item, categories, vm) }
+        if (rows.isEmpty()) item { EmptyHint("暂无待确认账单") }
+    }
+}
+
+@Composable
+private fun CandidateCard(item: TransactionEntity, categories: List<CategoryEntity>, vm: FinanceViewModel) {
+    val expenseCategories = categories.filter { it.categoryType == TransactionType.EXPENSE.wire }
+    var categoryId by remember(item.id, expenseCategories) { mutableStateOf(item.categoryId ?: expenseCategories.firstOrNull()?.id) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row {
+                Text(item.merchant ?: "自动捕获", Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                Text(MoneyParser.formatCny(item.amountCents), fontWeight = FontWeight.Bold)
+            }
+            Text("${item.sourceType} · ${item.localDate} · ${item.status}", style = MaterialTheme.typography.bodySmall)
+            Selector("建议分类", expenseCategories, categoryId, { it.id }, { it.name }) { categoryId = it }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { vm.confirm(item.id, categoryId) }, enabled = categoryId != null) { Text("分类并确认") }
+                OutlinedButton(onClick = { vm.ignore(item.id) }) { Text("忽略") }
             }
         }
-        if (rows.isEmpty()) item { EmptyHint("暂无待确认账单") }
     }
 }
 
@@ -308,7 +308,8 @@ private fun ReportsScreen(vm: FinanceViewModel) {
     val confirmed = tx.filter { it.deletedAt == null && it.status == "confirmed" && it.localDate.startsWith(month) }
     val expense = confirmed.filter { it.transactionType == "expense" }.sumOf { it.amountCents }
     val income = confirmed.filter { it.transactionType == "income" }.sumOf { it.amountCents }
-    val categoryTotals = confirmed.filter { it.transactionType == "expense" }.groupBy { it.categoryId }.mapValues { (_, items) -> items.sumOf { it.amountCents } }.entries.sortedByDescending { it.value }.take(5)
+    val categoryTotals = confirmed.filter { it.transactionType == "expense" }.groupBy { it.categoryId }
+        .mapValues { (_, rows) -> rows.sumOf { it.amountCents } }.entries.sortedByDescending { it.value }.take(5)
     val categories by vm.categories.collectAsState()
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("本月报表", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
@@ -320,7 +321,15 @@ private fun ReportsScreen(vm: FinanceViewModel) {
             val name = categories.firstOrNull { it.id == entry.key }?.name ?: "未分类"
             ListItem(headlineContent = { Text(name) }, trailingContent = { Text(MoneyParser.formatCny(entry.value)) })
         }
-        item { Text("预算与订阅尚未进入上游正式 finance.* Contract，本版不创建伪同步实体。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("预算 / 订阅", fontWeight = FontWeight.SemiBold)
+                    Text("等待上游正式 finance.* Contract", style = MaterialTheme.typography.bodySmall)
+                    Text("本版不创建 Android 私有同步实体，避免后续协议冲突。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
     }
 }
 
@@ -363,7 +372,12 @@ private fun SettingsScreen(vm: FinanceViewModel) {
                 }
             }
         }
-        item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(onClick = vm::syncNow) { Text("立即同步") }; OutlinedButton(onClick = { vm.snapshot() }) { Text("重新 Snapshot") } } }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = vm::syncNow) { Text("立即同步") }
+                OutlinedButton(onClick = { vm.snapshot() }) { Text("重新 Snapshot") }
+            }
+        }
         if (conflicts.isNotEmpty()) {
             item { Text("同步冲突", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
             items(conflicts, key = { it.conflictId }) { conflict -> ConflictCard(conflict, vm) }

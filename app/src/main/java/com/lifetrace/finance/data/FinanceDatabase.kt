@@ -19,7 +19,7 @@ data class ActiveProfileEntity(
     @ColumnInfo(name = "profile_id") val profileId: String,
 )
 
-@Entity(tableName = "finance_accounts", indices = [Index("local_profile_id"), Index(value=["local_profile_id","name"])])
+@Entity(tableName = "finance_accounts", indices = [Index("local_profile_id"), Index(value = ["local_profile_id", "name"])])
 data class AccountEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "local_profile_id") val localProfileId: String,
@@ -60,13 +60,13 @@ data class CategoryEntity(
 @Entity(
     tableName = "finance_transactions",
     indices = [
-        Index(value=["local_profile_id", "local_date"]),
-        Index(value=["local_profile_id", "occurred_at"]),
-        Index(value=["local_profile_id", "account_id", "occurred_at"]),
-        Index(value=["local_profile_id", "category_id", "local_date"]),
-        Index(value=["local_profile_id", "status", "occurred_at"]),
-        Index(value=["local_profile_id", "external_transaction_id"]),
-    ]
+        Index(value = ["local_profile_id", "local_date"]),
+        Index(value = ["local_profile_id", "occurred_at"]),
+        Index(value = ["local_profile_id", "account_id", "occurred_at"]),
+        Index(value = ["local_profile_id", "category_id", "local_date"]),
+        Index(value = ["local_profile_id", "status", "occurred_at"]),
+        Index(value = ["local_profile_id", "external_transaction_id"]),
+    ],
 )
 data class TransactionEntity(
     @PrimaryKey val id: String,
@@ -152,7 +152,25 @@ data class ConflictEntity(
     @ColumnInfo(name = "resolution_state") val resolutionState: String = "pending",
 )
 
-@Entity(tableName = "notification_events", indices = [Index(value=["dedup_key"], unique=true), Index("captured_at")])
+@Entity(tableName = "snapshot_progress")
+data class SnapshotProgressEntity(
+    @PrimaryKey val id: String = "default",
+    @ColumnInfo(name = "snapshot_id") val snapshotId: String,
+    @ColumnInfo(name = "next_page_token") val nextPageToken: String? = null,
+    @ColumnInfo(name = "snapshot_cursor") val snapshotCursor: String,
+    @ColumnInfo(name = "download_complete") val downloadComplete: Boolean = false,
+    @ColumnInfo(name = "updated_at") val updatedAt: String,
+)
+
+@Entity(tableName = "snapshot_staging", primaryKeys = ["entity_type", "entity_id"])
+data class SnapshotStagingEntity(
+    @ColumnInfo(name = "entity_type") val entityType: String,
+    @ColumnInfo(name = "entity_id") val entityId: String,
+    @ColumnInfo(name = "server_version") val serverVersion: String,
+    @ColumnInfo(name = "payload_json") val payloadJson: String,
+)
+
+@Entity(tableName = "notification_events", indices = [Index(value = ["dedup_key"], unique = true), Index("captured_at")])
 data class NotificationEventEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "source_package") val sourcePackage: String,
@@ -212,9 +230,6 @@ interface FinanceDao {
     @Query("UPDATE finance_categories SET deleted_at=:deletedAt, server_version=:version WHERE id=:id") suspend fun remoteDeleteCategory(id: String, deletedAt: String, version: String)
     @Query("UPDATE finance_transaction_evidence SET deleted_at=:deletedAt, server_version=:version WHERE id=:id") suspend fun remoteDeleteEvidence(id: String, deletedAt: String, version: String)
 
-    @Query("UPDATE finance_transactions SET status=:status, updated_at=:updatedAt, local_version=local_version+1 WHERE id=:id")
-    suspend fun updateTransactionStatus(id: String, status: String, updatedAt: String)
-
     @Query("SELECT COALESCE(SUM(CASE WHEN transaction_type='expense' THEN amount_cents ELSE 0 END),0) FROM finance_transactions WHERE local_profile_id=:profileId AND local_date BETWEEN :from AND :to AND deleted_at IS NULL AND status='confirmed'")
     fun expenseTotal(profileId: String, from: String, to: String): Flow<Long>
 
@@ -225,20 +240,35 @@ interface FinanceDao {
 @Dao
 interface SyncDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun enqueue(value: OutboxEntity)
+
     @Query("SELECT * FROM sync_outbox WHERE state='pending' AND next_attempt_at<=:now ORDER BY client_modified_at LIMIT :limit")
     suspend fun pending(now: Long, limit: Int): List<OutboxEntity>
+
+    @Query("SELECT COUNT(*) FROM sync_outbox WHERE state='pending' AND entity_type=:entityType AND entity_id=:entityId")
+    suspend fun pendingForEntity(entityType: String, entityId: String): Int
+
     @Query("DELETE FROM sync_outbox WHERE change_id=:changeId") suspend fun ack(changeId: String)
+
     @Query("UPDATE sync_outbox SET attempts=attempts+1, next_attempt_at=:nextAt, last_error=:error WHERE change_id=:changeId")
     suspend fun retry(changeId: String, nextAt: Long, error: String?)
+
     @Query("SELECT COUNT(*) FROM sync_outbox WHERE state='pending'") fun pendingCount(): Flow<Int>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveState(value: SyncStateEntity)
     @Query("SELECT * FROM sync_state WHERE id='default' LIMIT 1") suspend fun state(): SyncStateEntity?
     @Query("SELECT * FROM sync_state WHERE id='default' LIMIT 1") fun stateFlow(): Flow<SyncStateEntity?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveConflict(value: ConflictEntity)
     @Query("SELECT COUNT(*) FROM sync_conflicts WHERE resolution_state='pending'") fun conflictCount(): Flow<Int>
     @Query("SELECT * FROM sync_conflicts WHERE resolution_state='pending' ORDER BY created_at DESC") fun conflicts(): Flow<List<ConflictEntity>>
     @Query("SELECT * FROM sync_conflicts WHERE conflict_id=:id LIMIT 1") suspend fun conflict(id: String): ConflictEntity?
     @Query("UPDATE sync_conflicts SET resolution_state=:state WHERE conflict_id=:id") suspend fun markConflict(id: String, state: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveSnapshotProgress(value: SnapshotProgressEntity)
+    @Query("SELECT * FROM snapshot_progress WHERE id='default' LIMIT 1") suspend fun snapshotProgress(): SnapshotProgressEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun stageSnapshot(value: SnapshotStagingEntity)
+    @Query("SELECT * FROM snapshot_staging ORDER BY entity_type, entity_id") suspend fun stagedSnapshot(): List<SnapshotStagingEntity>
+    @Query("DELETE FROM snapshot_staging") suspend fun clearSnapshotStaging()
+    @Query("DELETE FROM snapshot_progress") suspend fun clearSnapshotProgress()
 }
 
 @Dao
@@ -269,9 +299,19 @@ interface DiagnosticDao {
 
 @Database(
     entities = [
-        LocalProfileEntity::class, ActiveProfileEntity::class, AccountEntity::class, CategoryEntity::class, TransactionEntity::class,
-        TransactionEvidenceEntity::class, OutboxEntity::class, SyncStateEntity::class, ConflictEntity::class,
-        NotificationEventEntity::class, DiagnosticEventEntity::class,
+        LocalProfileEntity::class,
+        ActiveProfileEntity::class,
+        AccountEntity::class,
+        CategoryEntity::class,
+        TransactionEntity::class,
+        TransactionEvidenceEntity::class,
+        OutboxEntity::class,
+        SyncStateEntity::class,
+        ConflictEntity::class,
+        SnapshotProgressEntity::class,
+        SnapshotStagingEntity::class,
+        NotificationEventEntity::class,
+        DiagnosticEventEntity::class,
     ],
     version = 1,
     exportSchema = true,
@@ -285,10 +325,15 @@ abstract class FinanceDatabase : RoomDatabase() {
 
     companion object {
         @Volatile private var instance: FinanceDatabase? = null
+
         fun get(context: Context): FinanceDatabase = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext, FinanceDatabase::class.java, "lifetrace-finance.db")
-                .fallbackToDestructiveMigrationOnDowngrade()
-                .build().also { instance = it }
+            instance ?: Room.databaseBuilder(
+                context.applicationContext,
+                FinanceDatabase::class.java,
+                "lifetrace-finance.db",
+            ).fallbackToDestructiveMigrationOnDowngrade()
+                .build()
+                .also { instance = it }
         }
     }
 }

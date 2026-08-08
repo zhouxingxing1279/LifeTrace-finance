@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.kapt")
 }
 
+val releaseKeystorePath = providers.environmentVariable("LIFETRACE_FINANCE_KEYSTORE_PATH").orNull
+val releaseStorePassword = providers.environmentVariable("LIFETRACE_FINANCE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("LIFETRACE_FINANCE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("LIFETRACE_FINANCE_KEY_PASSWORD").orNull
+val hasReleaseSigning = listOf(
+    releaseKeystorePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.lifetrace.finance"
     compileSdk = 35
@@ -12,13 +23,24 @@ android {
         applicationId = "com.lifetrace.finance"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = providers.environmentVariable("LIFETRACE_FINANCE_VERSION_CODE").orNull?.toIntOrNull() ?: 1
+        versionName = providers.environmentVariable("LIFETRACE_FINANCE_VERSION_NAME").orNull ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "LIFETRACE_APP_ID", "\"lifetrace-finance-android\"")
         buildConfigField("String", "LIFETRACE_DEFAULT_BASE_URL", "\"https://api.example.invalid\"")
         manifestPlaceholders["usesCleartextTraffic"] = "false"
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseKeystorePath))
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
@@ -32,6 +54,7 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("boolean", "DIAGNOSTICS_ENABLED", "true")
             manifestPlaceholders["usesCleartextTraffic"] = "false"
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -93,6 +116,7 @@ dependencies {
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")

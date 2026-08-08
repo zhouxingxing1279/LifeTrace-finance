@@ -2,6 +2,15 @@ name: Android Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version_name:
+        description: Version name, e.g. 0.1.0
+        required: true
+        default: 0.1.0
+      version_code:
+        description: Monotonic Android version code
+        required: true
+        default: '1'
   push:
     tags: ['finance-v*']
 
@@ -22,13 +31,34 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Validate and build release
+      - name: Require release signing secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.LIFETRACE_FINANCE_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.LIFETRACE_FINANCE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.LIFETRACE_FINANCE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.LIFETRACE_FINANCE_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64" || { echo "Missing LIFETRACE_FINANCE_KEYSTORE_B64"; exit 1; }
+          test -n "$STORE_PASSWORD" || { echo "Missing LIFETRACE_FINANCE_STORE_PASSWORD"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "Missing LIFETRACE_FINANCE_KEY_ALIAS"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "Missing LIFETRACE_FINANCE_KEY_PASSWORD"; exit 1; }
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/lifetrace-finance-release.jks"
+      - name: Validate and build signed release
+        env:
+          LIFETRACE_FINANCE_KEYSTORE_PATH: ${{ runner.temp }}/lifetrace-finance-release.jks
+          LIFETRACE_FINANCE_STORE_PASSWORD: ${{ secrets.LIFETRACE_FINANCE_STORE_PASSWORD }}
+          LIFETRACE_FINANCE_KEY_ALIAS: ${{ secrets.LIFETRACE_FINANCE_KEY_ALIAS }}
+          LIFETRACE_FINANCE_KEY_PASSWORD: ${{ secrets.LIFETRACE_FINANCE_KEY_PASSWORD }}
+          LIFETRACE_FINANCE_VERSION_NAME: ${{ inputs.version_name || github.ref_name }}
+          LIFETRACE_FINANCE_VERSION_CODE: ${{ inputs.version_code || github.run_number }}
         run: gradle --no-daemon :core:test :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:bundleRelease --stacktrace
+      - name: Verify APK signature
+        run: apksigner verify --verbose app/build/outputs/apk/release/*.apk
       - name: Checksums
         run: find app/build/outputs -type f \( -name '*.apk' -o -name '*.aab' \) -print0 | xargs -0 sha256sum | tee SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: lifetrace-finance-release-unsigned
+          name: lifetrace-finance-release-signed
           path: |
             app/build/outputs/apk/release/*.apk
             app/build/outputs/bundle/release/*.aab

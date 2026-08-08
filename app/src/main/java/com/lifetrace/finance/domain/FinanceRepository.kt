@@ -186,26 +186,26 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         return txId.takeIf { inserted }
     }
 
-    suspend fun confirmCandidate(id: String) = changeStatus(id, TransactionStatus.CONFIRMED)
+    suspend fun confirmCandidate(id: String, categoryId: String? = null) = changeStatus(id, TransactionStatus.CONFIRMED, categoryId)
     suspend fun ignoreCandidate(id: String) = changeStatus(id, TransactionStatus.IGNORED)
 
-    private suspend fun changeStatus(id: String, status: TransactionStatus) {
+    private suspend fun changeStatus(id: String, status: TransactionStatus, categoryId: String? = null) {
         val current = finance.transactionById(id) ?: return
         val now = Instant.now().toString()
-        val changed = current.copy(status = status.wire, updatedAt = now, localVersion = current.localVersion + 1, modifiedByDevice = deviceId)
+        val changed = current.copy(
+            status = status.wire,
+            categoryId = categoryId ?: current.categoryId,
+            updatedAt = now,
+            localVersion = current.localVersion + 1,
+            modifiedByDevice = deviceId,
+        )
         db.withTransaction {
             finance.upsertTransaction(changed)
             sync.enqueue(outboxFor(changed))
         }
     }
 
-    suspend fun updateTransaction(
-        id: String,
-        amountCents: Long,
-        categoryId: String?,
-        merchant: String?,
-        note: String?,
-    ) {
+    suspend fun updateTransaction(id: String, amountCents: Long, categoryId: String?, merchant: String?, note: String?) {
         require(amountCents > 0)
         val current = finance.transactionById(id) ?: return
         val updated = current.copy(
@@ -301,8 +301,7 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
     private fun outboxFor(entity: TransactionEvidenceEntity): OutboxEntity {
         val payload = JSONObject()
             .put("meta", meta(entity.id, entity.localProfileId, entity.createdAt, entity.updatedAt, entity.deletedAt, entity.localVersion, entity.serverVersion))
-            .put("transactionId", entity.transactionId)
-            .put("sourceType", entity.sourceType)
+            .put("transactionId", entity.transactionId).put("sourceType", entity.sourceType)
             .put("sourceId", entity.sourceId ?: JSONObject.NULL)
             .put("externalTransactionId", entity.externalTransactionId ?: JSONObject.NULL)
             .put("confidence", entity.confidence ?: JSONObject.NULL)
@@ -317,15 +316,7 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         )
     }
 
-    private fun outbox(
-        entityType: String,
-        entityId: String,
-        base: String,
-        modifiedAt: String,
-        payload: String,
-        atomicGroupId: String? = null,
-        dependenciesJson: String = "[]",
-    ) = OutboxEntity(
+    private fun outbox(entityType: String, entityId: String, base: String, modifiedAt: String, payload: String, atomicGroupId: String? = null, dependenciesJson: String = "[]") = OutboxEntity(
         changeId = UUID.randomUUID().toString(), entityType = entityType, entityId = entityId, operation = "upsert",
         baseServerVersion = base, clientModifiedAt = modifiedAt, payloadJson = payload,
         atomicGroupId = atomicGroupId, dependenciesJson = dependenciesJson,

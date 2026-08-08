@@ -5,6 +5,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.lifetrace.finance.core.*
 import com.lifetrace.finance.data.FinanceDatabase
+import com.lifetrace.finance.data.SnapshotProgressEntity
+import com.lifetrace.finance.data.SnapshotStagingEntity
 import com.lifetrace.finance.domain.FinanceRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -41,7 +43,7 @@ class FinanceRepositoryTest {
         assertEquals(initial + 1, db.syncDao().pendingCount().first())
     }
 
-    @Test fun duplicateNotificationIsStoredOnceWithoutRawText() = runBlocking {
+    @Test fun duplicateNotificationIsStoredOnceWithoutRawTextAndCanClassify() = runBlocking {
         val profile = repo.ensureProfile()
         val candidate = requireNotNull(NotificationTransactionParser.parse(NotificationSample(
             packageName = SupportedPackages.WECHAT,
@@ -51,9 +53,16 @@ class FinanceRepositoryTest {
             notificationKey = "same-key",
         )))
         val key = NotificationTransactionParser.dedupKey(candidate)
-        assertNotNull(repo.captureNotificationCandidate(profile.id, candidate, key))
+        val capturedId = repo.captureNotificationCandidate(profile.id, candidate, key)
+        assertNotNull(capturedId)
+        val transactionId = requireNotNull(capturedId)
         assertNull(repo.captureNotificationCandidate(profile.id, candidate, key))
         assertEquals(1, repo.inbox(profile.id).first().size)
+        val category = repo.categories(profile.id).first().first { it.categoryType == "expense" }
+        repo.confirmCandidate(transactionId, category.id)
+        val confirmed = repo.transactions(profile.id).first().single()
+        assertEquals("confirmed", confirmed.status)
+        assertEquals(category.id, confirmed.categoryId)
     }
 
     @Test fun cloudBindingKeepsStableLocalProfileId() = runBlocking {
@@ -62,5 +71,12 @@ class FinanceRepositoryTest {
         assertEquals(local.id, bound.id)
         assertEquals("cloud-user-1", bound.cloudUserId)
         assertTrue(db.syncDao().state()!!.snapshotRequired)
+    }
+
+    @Test fun snapshotProgressAndStagingAreDurableRoomState() = runBlocking {
+        db.syncDao().stageSnapshot(SnapshotStagingEntity("finance.transaction", "tx-1", "7", "{\"meta\":{\"id\":\"tx-1\"}}"))
+        db.syncDao().saveSnapshotProgress(SnapshotProgressEntity(snapshotId = "snap-1", nextPageToken = "p2", snapshotCursor = "42", updatedAt = "2026-08-08T00:00:00Z"))
+        assertEquals("p2", db.syncDao().snapshotProgress()!!.nextPageToken)
+        assertEquals("tx-1", db.syncDao().stagedSnapshot().single().entityId)
     }
 }
