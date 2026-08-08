@@ -9,12 +9,14 @@ import com.lifetrace.finance.core.MoneyParser
 import com.lifetrace.finance.core.TransactionType
 import com.lifetrace.finance.data.*
 import com.lifetrace.finance.sync.SyncScheduler
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 data class UiMessage(val text: String, val error: Boolean = false)
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class FinanceViewModel(application: Application) : AndroidViewModel(application) {
     private val graph = AppGraph.get(application)
     private val repo = graph.finance
