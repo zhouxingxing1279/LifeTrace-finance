@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -95,6 +96,8 @@ private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialT
     val accounts by vm.accounts.collectAsState()
     val categories by vm.categories.collectAsState()
     val amountFocus = remember { FocusRequester() }
+    var amountFieldAttached by remember { mutableStateOf(false) }
+    var focusRequested by remember { mutableStateOf(false) }
     var type by remember(initialTransactionType) {
         mutableStateOf(
             when (initialTransactionType) {
@@ -111,7 +114,12 @@ private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialT
     var toAccountId by remember { mutableStateOf<String?>(null) }
     var categoryId by remember(type, categories) { mutableStateOf(categories.firstOrNull { it.categoryType == type.wire }?.id) }
 
-    LaunchedEffect(Unit) { amountFocus.requestFocus() }
+    LaunchedEffect(amountFieldAttached) {
+        if (amountFieldAttached && !focusRequested) {
+            focusRequested = true
+            amountFocus.requestFocus()
+        }
+    }
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -130,7 +138,10 @@ private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialT
             OutlinedTextField(
                 value = amount,
                 onValueChange = { amount = it },
-                modifier = Modifier.fillMaxWidth().focusRequester(amountFocus).testTag("quick_amount"),
+                modifier = Modifier.fillMaxWidth()
+                    .focusRequester(amountFocus)
+                    .onGloballyPositioned { amountFieldAttached = true }
+                    .testTag("quick_amount"),
                 label = { Text("金额") },
                 prefix = { Text("¥") },
                 singleLine = true,
