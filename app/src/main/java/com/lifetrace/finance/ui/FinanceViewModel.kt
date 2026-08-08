@@ -88,8 +88,26 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         _profile.value?.let { repo.createAccount(it.id, name, type); SyncScheduler.scheduleNow(getApplication()) }
     }
 
+    fun archiveAccount(id: String) {
+        if (accounts.value.size <= 1) {
+            _message.value = UiMessage("至少保留一个可用账户", true)
+            return
+        }
+        viewModelScope.launch {
+            runCatching { repo.archiveAccount(id) }
+                .onSuccess { _message.value = UiMessage("账户已归档，历史账单仍保留"); SyncScheduler.scheduleNow(getApplication()) }
+                .onFailure { _message.value = UiMessage(it.message ?: "账户归档失败", true) }
+        }
+    }
+
     fun addCategory(name: String, type: TransactionType) = viewModelScope.launch {
         _profile.value?.let { repo.createCategory(it.id, name, type); SyncScheduler.scheduleNow(getApplication()) }
+    }
+
+    fun archiveCategory(id: String) = viewModelScope.launch {
+        runCatching { repo.archiveCategory(id) }
+            .onSuccess { _message.value = UiMessage("分类已归档，历史账单仍保留"); SyncScheduler.scheduleNow(getApplication()) }
+            .onFailure { _message.value = UiMessage(it.message ?: "分类归档失败", true) }
     }
 
     fun login(email: String, password: String) = viewModelScope.launch {

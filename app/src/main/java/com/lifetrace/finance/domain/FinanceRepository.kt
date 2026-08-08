@@ -254,6 +254,34 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         return entity.id
     }
 
+    suspend fun archiveAccount(id: String) {
+        val current = finance.accountById(id) ?: return
+        if (current.isArchived) return
+        val updated = current.copy(
+            isArchived = true,
+            updatedAt = Instant.now().toString(),
+            localVersion = current.localVersion + 1,
+        )
+        db.withTransaction {
+            finance.upsertAccount(updated)
+            sync.enqueue(outboxFor(updated))
+        }
+    }
+
+    suspend fun archiveCategory(id: String) {
+        val current = finance.categoryById(id) ?: return
+        if (current.isArchived) return
+        val updated = current.copy(
+            isArchived = true,
+            updatedAt = Instant.now().toString(),
+            localVersion = current.localVersion + 1,
+        )
+        db.withTransaction {
+            finance.upsertCategory(updated)
+            sync.enqueue(outboxFor(updated))
+        }
+    }
+
     private suspend fun seedDefaults(profileId: String) {
         val now = Instant.now().toString()
         val account = AccountEntity(UUID.randomUUID().toString(), profileId, "默认账户", "other", createdAt = now, updatedAt = now)

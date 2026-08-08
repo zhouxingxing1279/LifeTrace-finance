@@ -36,4 +36,11 @@ class LaunchTest {
         }
         assertTrue("quick entry exceeded 3 seconds", SystemClock.elapsedRealtime() - started <= 3_000)
     }
+
+    @Test fun searchAndAccountTypeControlsAreReachable() {
+        rule.onNodeWithText("账单").performClick()
+        rule.onNodeWithTag("transaction_search").assertIsDisplayed()
+        rule.onNodeWithText("账户").performClick()
+        rule.onNodeWithText("账户类型：其他").assertIsDisplayed()
+    }
 }
