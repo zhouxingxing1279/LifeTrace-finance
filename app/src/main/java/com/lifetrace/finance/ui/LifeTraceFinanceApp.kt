@@ -34,6 +34,19 @@ private enum class Destination(val label: String) {
     QUICK("记账"), TRANSACTIONS("账单"), INBOX("待确认"), ACCOUNTS("账户"), REPORTS("报表"), SETTINGS("设置")
 }
 
+private data class AccountTypeOption(val wire: String, val label: String)
+
+private val accountTypeOptions = listOf(
+    AccountTypeOption("cash", "现金"),
+    AccountTypeOption("bank", "银行卡"),
+    AccountTypeOption("wechat", "微信"),
+    AccountTypeOption("alipay", "支付宝"),
+    AccountTypeOption("investment", "投资/理财"),
+    AccountTypeOption("other", "其他"),
+)
+
+private fun accountTypeLabel(wire: String): String = accountTypeOptions.firstOrNull { it.wire == wire }?.label ?: wire
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LifeTraceFinanceApp(vm: FinanceViewModel, initialDestination: String, sharedText: String?, initialTransactionType: String? = null) {
@@ -198,10 +211,59 @@ private fun TransactionsScreen(vm: FinanceViewModel) {
     val rows by vm.transactions.collectAsState()
     val categories by vm.categories.collectAsState()
     var editing by remember { mutableStateOf<TransactionEntity?>(null) }
+    var query by remember { mutableStateOf("") }
+    var typeFilter by remember { mutableStateOf<String?>(null) }
+    val filteredRows = remember(rows, query, typeFilter) {
+        val needle = query.trim()
+        rows.filter { item ->
+            val typeMatches = typeFilter == null || item.transactionType == typeFilter
+            val searchMatches = needle.isBlank() || listOfNotNull(
+                item.merchant,
+                item.counterparty,
+                item.item,
+                item.note,
+                item.localDate,
+                MoneyParser.formatPlain(item.amountCents),
+                MoneyParser.formatCny(item.amountCents),
+            ).any { it.contains(needle, ignoreCase = true) }
+            typeMatches && searchMatches
+        }
+    }
+
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Text("最近账单", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
-        items(rows, key = { it.id }) { item -> TransactionRow(item) { editing = item } }
-        if (rows.isEmpty()) item { EmptyHint("暂无账单") }
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().testTag("transaction_search"),
+                label = { Text("搜索商户、备注、日期或金额") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, contentDescription = "清空搜索") }
+                    }
+                },
+                singleLine = true,
+            )
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(selected = typeFilter == null, onClick = { typeFilter = null }, label = { Text("全部") })
+                FilterChip(selected = typeFilter == "expense", onClick = { typeFilter = "expense" }, label = { Text("支出") })
+                FilterChip(selected = typeFilter == "income", onClick = { typeFilter = "income" }, label = { Text("收入") })
+                FilterChip(selected = typeFilter == "transfer", onClick = { typeFilter = "transfer" }, label = { Text("转账") })
+            }
+        }
+        item {
+            Text(
+                "显示 ${filteredRows.size} / ${rows.size} 笔",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        items(filteredRows, key = { it.id }) { item -> TransactionRow(item) { editing = item } }
+        if (filteredRows.isEmpty()) item { EmptyHint(if (rows.isEmpty()) "暂无账单" else "没有匹配的账单") }
     }
     editing?.let { item ->
         EditTransactionDialog(
@@ -283,20 +345,53 @@ private fun CandidateCard(item: TransactionEntity, categories: List<CategoryEnti
 
 @Composable
 private fun AccountsCategoriesScreen(vm: FinanceViewModel) {
-    val accounts by vm.accounts.collectAsState(); val categories by vm.categories.collectAsState()
-    var accountName by remember { mutableStateOf("") }; var categoryName by remember { mutableStateOf("") }
+    val accounts by vm.accounts.collectAsState()
+    val categories by vm.categories.collectAsState()
+    var accountName by remember { mutableStateOf("") }
+    var accountType by remember { mutableStateOf("other") }
+    var categoryName by remember { mutableStateOf("") }
     var categoryType by remember { mutableStateOf(TransactionType.EXPENSE) }
+
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("账户", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
-        items(accounts, key = { it.id }) { account -> ListItem(headlineContent = { Text(account.name) }, supportingContent = { Text(account.accountType) }, leadingContent = { Icon(Icons.Default.AccountBalanceWallet, null) }) }
+        items(accounts, key = { it.id }) { account ->
+            ListItem(
+                headlineContent = { Text(account.name) },
+                supportingContent = { Text(accountTypeLabel(account.accountType)) },
+                leadingContent = { Icon(Icons.Default.AccountBalanceWallet, null) },
+                trailingContent = {
+                    IconButton(onClick = { vm.archiveAccount(account.id) }, enabled = accounts.size > 1) {
+                        Icon(Icons.Default.Archive, contentDescription = if (accounts.size > 1) "归档账户" else "至少保留一个账户")
+                    }
+                },
+            )
+        }
+        item { Selector("账户类型", accountTypeOptions, accountType, { it.wire }, { it.label }) { accountType = it } }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(accountName, { accountName = it }, Modifier.weight(1f), label = { Text("新账户") }, singleLine = true)
-                Button(onClick = { if (accountName.isNotBlank()) { vm.addAccount(accountName, "other"); accountName = "" } }) { Text("添加") }
+                Button(onClick = { if (accountName.isNotBlank()) { vm.addAccount(accountName, accountType); accountName = "" } }) { Text("添加") }
             }
         }
+        item {
+            Text(
+                "归档账户不会删除历史账单，只会从后续记账选择中隐藏；至少保留一个可用账户。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         item { HorizontalDivider(); Text("分类", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
-        items(categories, key = { it.id }) { category -> ListItem(headlineContent = { Text(category.name) }, supportingContent = { Text(category.categoryType) }) }
+        items(categories, key = { it.id }) { category ->
+            ListItem(
+                headlineContent = { Text(category.name) },
+                supportingContent = { Text(if (category.categoryType == "income") "收入" else "支出") },
+                trailingContent = {
+                    IconButton(onClick = { vm.archiveCategory(category.id) }) {
+                        Icon(Icons.Default.Archive, contentDescription = "归档分类")
+                    }
+                },
+            )
+        }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TypeChip("支出", categoryType == TransactionType.EXPENSE, Modifier.weight(1f)) { categoryType = TransactionType.EXPENSE }
@@ -308,6 +403,13 @@ private fun AccountsCategoriesScreen(vm: FinanceViewModel) {
                 OutlinedTextField(categoryName, { categoryName = it }, Modifier.weight(1f), label = { Text("新分类") }, singleLine = true)
                 Button(onClick = { if (categoryName.isNotBlank()) { vm.addCategory(categoryName, categoryType); categoryName = "" } }) { Text("添加") }
             }
+        }
+        item {
+            Text(
+                "归档分类不会修改历史账单，只会从后续分类选择中隐藏。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
