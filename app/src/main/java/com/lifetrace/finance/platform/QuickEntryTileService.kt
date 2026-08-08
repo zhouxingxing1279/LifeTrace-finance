@@ -1,5 +1,6 @@
 package com.lifetrace.finance.platform
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
@@ -21,8 +22,13 @@ class QuickEntryTileService : TileService() {
             )
             startActivityAndCollapse(pendingIntent)
         } else {
-            @Suppress("DEPRECATION")
-            startActivityAndCollapse(intent)
+            startLegacy(intent)
         }
+    }
+
+    @SuppressLint("StartActivityAndCollapseDeprecated")
+    @Suppress("DEPRECATION")
+    private fun startLegacy(intent: Intent) {
+        startActivityAndCollapse(intent)
     }
 }
