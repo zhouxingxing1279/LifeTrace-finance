@@ -1,0 +1,10 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical" android:padding="12dp" android:background="#F5F6FA">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="LifeTrace Finance" android:textStyle="bold" android:textSize="16sp" android:textColor="#1F2328" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingTop="8dp">
+        <Button android:id="@+id/widget_expense" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:text="+ 支出" />
+        <Button android:id="@+id/widget_income" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:text="+ 收入" />
+        <Button android:id="@+id/widget_inbox" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:text="待确认" />
+    </LinearLayout>
+</LinearLayout>
