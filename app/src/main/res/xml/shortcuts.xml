@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="expense" android:enabled="true" android:icon="@drawable/ic_lifetrace" android:shortcutShortLabel="@string/shortcut_expense">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.lifetrace.finance" android:targetClass="com.lifetrace.finance.MainActivity" android:data="lifetrace-finance://quick/expense" />
+    </shortcut>
+    <shortcut android:shortcutId="income" android:enabled="true" android:icon="@drawable/ic_lifetrace" android:shortcutShortLabel="@string/shortcut_income">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.lifetrace.finance" android:targetClass="com.lifetrace.finance.MainActivity" android:data="lifetrace-finance://quick/income" />
+    </shortcut>
+    <shortcut android:shortcutId="transfer" android:enabled="true" android:icon="@drawable/ic_lifetrace" android:shortcutShortLabel="@string/shortcut_transfer">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.lifetrace.finance" android:targetClass="com.lifetrace.finance.MainActivity" android:data="lifetrace-finance://quick/transfer" />
+    </shortcut>
+    <shortcut android:shortcutId="inbox" android:enabled="true" android:icon="@drawable/ic_lifetrace" android:shortcutShortLabel="@string/shortcut_inbox">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.lifetrace.finance" android:targetClass="com.lifetrace.finance.MainActivity" android:data="lifetrace-finance://inbox" />
+    </shortcut>
+</shortcuts>

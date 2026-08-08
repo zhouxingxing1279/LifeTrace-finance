@@ -1,0 +1,35 @@
+name: Android Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['finance-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Validate and build release
+        run: gradle --no-daemon :core:test :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:bundleRelease --stacktrace
+      - name: Checksums
+        run: find app/build/outputs -type f \( -name '*.apk' -o -name '*.aab' \) -print0 | xargs -0 sha256sum | tee SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lifetrace-finance-release-unsigned
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab
+            SHA256SUMS.txt
