@@ -112,6 +112,7 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
             toAccountId = toAccountId,
             categoryId = categoryId,
             merchant = merchant,
+            note = note,
             occurredAt = occurredAt.toString(),
             localDate = occurredAt.atZone(ZoneId.systemDefault()).toLocalDate().toString(),
             status = status.wire,
