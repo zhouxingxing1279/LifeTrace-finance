@@ -79,4 +79,28 @@ class FinanceRepositoryTest {
         assertEquals("p2", db.syncDao().snapshotProgress()!!.nextPageToken)
         assertEquals("tx-1", db.syncDao().stagedSnapshot().single().entityId)
     }
+
+    @Test fun archivedAccountIsHiddenButRetainedAndEnqueued() = runBlocking {
+        val profile = repo.ensureProfile()
+        val accountId = repo.createAccount(profile.id, "工资卡", "bank")
+        val before = requireNotNull(db.financeDao().accountById(accountId))
+        repo.archiveAccount(accountId)
+        val archived = requireNotNull(db.financeDao().accountById(accountId))
+        assertTrue(archived.isArchived)
+        assertEquals(before.localVersion + 1, archived.localVersion)
+        assertFalse(repo.accounts(profile.id).first().any { it.id == accountId })
+        assertTrue(db.syncDao().pendingForEntity("finance.account", accountId) >= 1)
+    }
+
+    @Test fun archivedCategoryIsHiddenButRetainedAndEnqueued() = runBlocking {
+        val profile = repo.ensureProfile()
+        val categoryId = repo.createCategory(profile.id, "旅行", TransactionType.EXPENSE)
+        val before = requireNotNull(db.financeDao().categoryById(categoryId))
+        repo.archiveCategory(categoryId)
+        val archived = requireNotNull(db.financeDao().categoryById(categoryId))
+        assertTrue(archived.isArchived)
+        assertEquals(before.localVersion + 1, archived.localVersion)
+        assertFalse(repo.categories(profile.id).first().any { it.id == categoryId })
+        assertTrue(db.syncDao().pendingForEntity("finance.category", categoryId) >= 1)
+    }
 }
