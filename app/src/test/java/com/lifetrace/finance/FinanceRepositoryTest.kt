@@ -58,6 +58,9 @@ class FinanceRepositoryTest {
         val transactionId = requireNotNull(capturedId)
         assertNull(repo.captureNotificationCandidate(profile.id, candidate, key))
         assertEquals(1, repo.inbox(profile.id).first().size)
+        val capturedEvent = db.notificationDao().recent().first().single()
+        assertEquals(SupportedPackages.WECHAT, capturedEvent.sourcePackage)
+        assertEquals(transactionId, capturedEvent.transactionId)
         val category = repo.categories(profile.id).first().first { it.categoryType == "expense" }
         repo.confirmCandidate(transactionId, category.id)
         val confirmed = repo.transactions(profile.id).first().single()
@@ -71,6 +74,34 @@ class FinanceRepositoryTest {
         assertEquals(local.id, bound.id)
         assertEquals("cloud-user-1", bound.cloudUserId)
         assertTrue(db.syncDao().state()!!.snapshotRequired)
+    }
+
+    @Test fun importedConfirmedTransactionWithoutCategoryNeedsReview() = runBlocking {
+        val profile = repo.ensureProfile()
+        val account = repo.accounts(profile.id).first().first()
+        val id = repo.createTransaction(
+            profile.id,
+            TransactionType.EXPENSE,
+            3200,
+            account.id,
+            merchant = "星巴克咖啡",
+            status = TransactionStatus.CONFIRMED,
+            sourceType = "bill_import",
+        )
+        assertEquals(id, repo.inbox(profile.id).first().single().id)
+        val food = repo.categories(profile.id).first().first { it.name == "餐饮" }
+        repo.confirmCandidate(id, food.id)
+        assertTrue(repo.inbox(profile.id).first().isEmpty())
+    }
+
+    @Test fun standardCategoriesAreSeededWithoutDuplicates() = runBlocking {
+        val profile = repo.ensureProfile()
+        repo.ensureStandardCategories(profile.id)
+        repo.ensureStandardCategories(profile.id)
+        val categories = repo.categories(profile.id).first()
+        assertEquals(StandardCategories.ALL.size, categories.size)
+        assertTrue(categories.any { it.name == "交通" && it.categoryType == "expense" })
+        assertTrue(categories.any { it.name == "退款" && it.categoryType == "income" })
     }
 
     @Test fun snapshotProgressAndStagingAreDurableRoomState() = runBlocking {

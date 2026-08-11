@@ -45,6 +45,31 @@ class CoreTests {
         assertEquals(7_000L, SyncPolicy.retryDelayMillis(4, 7))
         assertEquals(25, SyncPolicy.nextBatchSize(50, 413))
     }
+
+    @Test fun categoryClassifierUsesKeywordsAndExistingCategories() {
+        val categories = listOf(
+            ClassificationCategory("food", "餐饮", "expense"),
+            ClassificationCategory("travel", "交通", "expense"),
+        )
+        val coffee = CategoryClassifier.suggest("expense", "星巴克咖啡有限公司", null, null, null, categories)
+        assertNotNull(coffee)
+        assertEquals("food", coffee.categoryId)
+        assertTrue(coffee.reason.contains("星巴克"))
+
+        val taxi = CategoryClassifier.suggest("expense", "滴滴出行", null, null, null, categories)
+        assertEquals("travel", assertNotNull(taxi).categoryId)
+    }
+
+    @Test fun categoryClassifierLearnsConfirmedMerchantAndDoesNotGuessWithoutEvidence() {
+        val categories = listOf(ClassificationCategory("custom", "宠物", "expense"))
+        val history = listOf(ClassificationHistory(merchant = "某某宠物生活馆", categoryId = "custom"))
+        val learned = CategoryClassifier.suggest("expense", "某某宠物生活馆（旗舰店）", null, null, null, categories, history)
+        assertEquals("custom", assertNotNull(learned).categoryId)
+        assertEquals(0.98, learned.confidence)
+
+        assertNull(CategoryClassifier.suggest("expense", null, null, null, null, categories, history))
+        assertNull(CategoryClassifier.suggest("transfer", "滴滴", null, null, null, categories, history))
+    }
 }
 
 class NotificationFixtureTests {

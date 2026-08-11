@@ -3,10 +3,12 @@ package com.lifetrace.finance.ui
 import android.content.Intent
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -16,23 +18,41 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.lifetrace.finance.core.CategoryClassifier
+import com.lifetrace.finance.core.CategorySuggestion
+import com.lifetrace.finance.core.ClassificationCategory
+import com.lifetrace.finance.core.ClassificationHistory
 import com.lifetrace.finance.core.MoneyParser
 import com.lifetrace.finance.core.TransactionType
 import com.lifetrace.finance.data.CategoryEntity
 import com.lifetrace.finance.data.ConflictEntity
+import com.lifetrace.finance.data.NotificationEventEntity
 import com.lifetrace.finance.data.TransactionEntity
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 private enum class Destination(val label: String) {
-    QUICK("记账"), TRANSACTIONS("账单"), INBOX("待确认"), ACCOUNTS("账户"), REPORTS("报表"), SETTINGS("设置")
+    HOME("首页"), TRANSACTIONS("明细"), QUICK("记账"), INBOX("待确认"), REPORTS("统计"), PROFILE("我的")
 }
+
+private val bottomDestinations = listOf(
+    Destination.HOME,
+    Destination.TRANSACTIONS,
+    Destination.QUICK,
+    Destination.REPORTS,
+    Destination.PROFILE,
+)
 
 private data class AccountTypeOption(val wire: String, val label: String)
 
@@ -51,18 +71,44 @@ private fun accountTypeLabel(wire: String): String = accountTypeOptions.firstOrN
 @Composable
 fun LifeTraceFinanceApp(vm: FinanceViewModel, initialDestination: String, sharedText: String?, initialTransactionType: String? = null) {
     var destination by remember { mutableStateOf(initialDestination.toDestination()) }
+    var quickType by remember { mutableStateOf(initialTransactionType) }
     val message by vm.message.collectAsState()
     val inbox by vm.inbox.collectAsState()
     Scaffold(
-        topBar = { TopAppBar(title = { Text("LifeTrace Finance") }) },
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            if (destination != Destination.HOME) {
+                CenterAlignedTopAppBar(
+                    title = { Text(destination.label, fontWeight = FontWeight.SemiBold) },
+                    navigationIcon = {
+                        if (destination == Destination.INBOX) {
+                            IconButton(onClick = { destination = Destination.HOME }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "返回首页")
+                            }
+                        }
+                    },
+                )
+            }
+        },
         bottomBar = {
             NavigationBar {
-                Destination.entries.forEach { item ->
+                bottomDestinations.forEach { item ->
                     NavigationBarItem(
                         selected = destination == item,
                         onClick = { destination = item },
-                        icon = { Icon(item.icon(), contentDescription = item.label) },
-                        label = { Text(if (item == Destination.INBOX && inbox.isNotEmpty()) "${item.label} ${inbox.size}" else item.label) },
+                        icon = {
+                            if (item == Destination.QUICK) {
+                                Box(
+                                    Modifier.size(42.dp).background(MaterialTheme.colorScheme.primary, CircleShape),
+                                    contentAlignment = Alignment.Center,
+                                ) { Icon(Icons.Default.Add, contentDescription = "记一笔", tint = MaterialTheme.colorScheme.onPrimary) }
+                            } else {
+                                BadgedBox(badge = {
+                                    if (item == Destination.HOME && inbox.isNotEmpty()) Badge { Text(inbox.size.toString()) }
+                                }) { Icon(item.icon(), contentDescription = item.label) }
+                            }
+                        },
+                        label = { Text(item.label) },
                     )
                 }
             }
@@ -75,12 +121,17 @@ fun LifeTraceFinanceApp(vm: FinanceViewModel, initialDestination: String, shared
                 }
             }
             when (destination) {
-                Destination.QUICK -> QuickEntryScreen(vm, sharedText, initialTransactionType)
+                Destination.HOME -> HomeScreen(
+                    vm,
+                    onQuickEntry = { type -> quickType = type; destination = Destination.QUICK },
+                    onOpenInbox = { destination = Destination.INBOX },
+                    onOpenTransactions = { destination = Destination.TRANSACTIONS },
+                )
+                Destination.QUICK -> QuickEntryScreen(vm, sharedText, quickType)
                 Destination.TRANSACTIONS -> TransactionsScreen(vm)
                 Destination.INBOX -> InboxScreen(vm)
-                Destination.ACCOUNTS -> AccountsCategoriesScreen(vm)
                 Destination.REPORTS -> ReportsScreen(vm)
-                Destination.SETTINGS -> SettingsScreen(vm)
+                Destination.PROFILE -> ProfileScreen(vm)
             }
         }
     }
@@ -89,19 +140,188 @@ fun LifeTraceFinanceApp(vm: FinanceViewModel, initialDestination: String, shared
 private fun String.toDestination(): Destination = when (this) {
     "transactions" -> Destination.TRANSACTIONS
     "inbox" -> Destination.INBOX
-    "accounts" -> Destination.ACCOUNTS
     "reports" -> Destination.REPORTS
-    "settings" -> Destination.SETTINGS
-    else -> Destination.QUICK
+    "accounts", "settings" -> Destination.PROFILE
+    "quick" -> Destination.QUICK
+    else -> Destination.HOME
 }
 
 private fun Destination.icon() = when (this) {
-    Destination.QUICK -> Icons.Default.AddCircle
+    Destination.HOME -> Icons.Default.Home
+    Destination.QUICK -> Icons.Default.Add
     Destination.TRANSACTIONS -> Icons.Default.ReceiptLong
     Destination.INBOX -> Icons.Default.Inbox
-    Destination.ACCOUNTS -> Icons.Default.AccountBalanceWallet
     Destination.REPORTS -> Icons.Default.BarChart
-    Destination.SETTINGS -> Icons.Default.Settings
+    Destination.PROFILE -> Icons.Default.Person
+}
+
+@Composable
+private fun HomeScreen(
+    vm: FinanceViewModel,
+    onQuickEntry: (String) -> Unit,
+    onOpenInbox: () -> Unit,
+    onOpenTransactions: () -> Unit,
+) {
+    val transactions by vm.transactions.collectAsState()
+    val inbox by vm.inbox.collectAsState()
+    val categories by vm.categories.collectAsState()
+    val accounts by vm.accounts.collectAsState()
+    val now = LocalDate.now()
+    val month = now.toString().take(7)
+    val monthRows = transactions.filter { it.deletedAt == null && it.status == "confirmed" && it.localDate.startsWith(month) }
+    val expense = monthRows.filter { it.transactionType == "expense" }.sumOf { it.amountCents }
+    val income = monthRows.filter { it.transactionType == "income" }.sumOf { it.amountCents }
+    val recentRows = transactions.filter { it.deletedAt == null }.take(4)
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("LifeTrace", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "${now.format(DateTimeFormatter.ofPattern("M月d日"))} · 把每一笔花费变成线索",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            ) {
+                Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Column {
+                        Text("本月结余", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f))
+                        Text(
+                            MoneyParser.formatCny(income - expense),
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    }
+                    Row {
+                        SummaryMetric("收入", MoneyParser.formatCny(income), Modifier.weight(1f))
+                        SummaryMetric("支出", MoneyParser.formatCny(expense), Modifier.weight(1f))
+                        SummaryMetric("账户", "${accounts.size} 个", Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                HomeQuickAction("记支出", Icons.Default.Remove, Modifier.weight(1f)) { onQuickEntry("expense") }
+                HomeQuickAction("记收入", Icons.Default.Add, Modifier.weight(1f)) { onQuickEntry("income") }
+                HomeQuickAction("转账", Icons.Default.SwapHoriz, Modifier.weight(1f)) { onQuickEntry("transfer") }
+            }
+        }
+        if (inbox.isNotEmpty()) {
+            item {
+                Card(
+                    Modifier.fillMaxWidth().clickable(onClick = onOpenInbox),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                ) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("${inbox.size} 笔账单等待确认", fontWeight = FontWeight.SemiBold)
+                            Text("自动捕获与导入记录需要补充分类", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = "查看待确认账单")
+                    }
+                }
+            }
+        }
+        item { SectionTitle("最近明细", "查看全部", onOpenTransactions) }
+        if (recentRows.isEmpty()) {
+            item { EmptyHint("还没有账单，先记下第一笔吧") }
+        } else {
+            items(recentRows, key = { it.id }) { item ->
+                val category = categories.firstOrNull { it.id == item.categoryId }?.name
+                CompactTransactionRow(item, category)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f))
+        Text(value, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimary, maxLines = 1)
+    }
+}
+
+@Composable
+private fun HomeQuickAction(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        modifier = modifier.heightIn(min = 72.dp).clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text(label, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+private fun SectionTitle(title: String, action: String? = null, onAction: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        if (action != null && onAction != null) TextButton(onClick = onAction) { Text(action) }
+    }
+}
+
+@Composable
+private fun CompactTransactionRow(item: TransactionEntity, category: String?) {
+    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+                Icon(
+                    if (item.transactionType == "income") Icons.Default.SouthWest else Icons.Default.NorthEast,
+                    contentDescription = null,
+                    modifier = Modifier.padding(10.dp),
+                    tint = if (item.transactionType == "income") MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(item.merchant ?: item.counterparty ?: category ?: "未分类账单", fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${category ?: "未分类"} · ${item.localDate}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(
+                "${if (item.transactionType == "income") "+" else "−"}${MoneyParser.formatCny(item.amountCents)}",
+                fontWeight = FontWeight.SemiBold,
+                color = if (item.transactionType == "income") MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProfileScreen(vm: FinanceViewModel) {
+    var tab by remember { mutableIntStateOf(0) }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("账户与分类") }, leadingIcon = { Icon(Icons.Default.AccountBalanceWallet, null) }, modifier = Modifier.weight(1f))
+            FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("同步与安全") }, leadingIcon = { Icon(Icons.Default.Settings, null) }, modifier = Modifier.weight(1f))
+        }
+        Box(Modifier.weight(1f)) {
+            if (tab == 0) AccountsCategoriesScreen(vm) else SettingsScreen(vm)
+        }
+    }
 }
 
 @Composable
@@ -139,7 +359,12 @@ private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialT
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { Text("快速记账", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("今天记一笔", style = MaterialTheme.typography.headlineSmall)
+                Text("先填金额，其他信息可以稍后补充", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TypeChip("支出", type == TransactionType.EXPENSE, Modifier.weight(1f)) { type = TransactionType.EXPENSE }
@@ -178,7 +403,7 @@ private fun QuickEntryScreen(vm: FinanceViewModel, sharedText: String?, initialT
                 },
                 modifier = Modifier.fillMaxWidth().height(52.dp).testTag("quick_save"),
                 enabled = accounts.isNotEmpty(),
-            ) { Text("保存") }
+            ) { Icon(Icons.Default.Check, null); Spacer(Modifier.width(8.dp)); Text("保存账单") }
         }
         item { Text("保存先写入本机数据库和 Outbox，不等待网络。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
@@ -262,7 +487,9 @@ private fun TransactionsScreen(vm: FinanceViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        items(filteredRows, key = { it.id }) { item -> TransactionRow(item) { editing = item } }
+        items(filteredRows, key = { it.id }) { item ->
+            TransactionRow(item, categories.firstOrNull { it.id == item.categoryId }?.name) { editing = item }
+        }
         if (filteredRows.isEmpty()) item { EmptyHint(if (rows.isEmpty()) "暂无账单" else "没有匹配的账单") }
     }
     editing?.let { item ->
@@ -277,14 +504,32 @@ private fun TransactionsScreen(vm: FinanceViewModel) {
 }
 
 @Composable
-private fun TransactionRow(item: TransactionEntity, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+private fun TransactionRow(item: TransactionEntity, categoryName: String?, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(item.merchant ?: item.counterparty ?: item.note ?: item.transactionType, fontWeight = FontWeight.Medium)
-                Text("${item.localDate} · ${item.status} · ${item.sourceType}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+                Icon(
+                    if (item.transactionType == "income") Icons.Default.SouthWest else if (item.transactionType == "transfer") Icons.Default.SwapHoriz else Icons.Default.NorthEast,
+                    contentDescription = null,
+                    modifier = Modifier.padding(10.dp),
+                    tint = if (item.transactionType == "income") MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
+                )
             }
-            Text(MoneyParser.formatCny(item.amountCents), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(item.merchant ?: item.counterparty ?: item.note ?: categoryName ?: "未分类账单", fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${categoryName ?: "未分类"} · ${item.localDate}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(
+                "${if (item.transactionType == "income") "+" else if (item.transactionType == "expense") "−" else ""}${MoneyParser.formatCny(item.amountCents)}",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (item.transactionType == "income") MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }
@@ -316,25 +561,97 @@ private fun EditTransactionDialog(item: TransactionEntity, categories: List<Cate
 private fun InboxScreen(vm: FinanceViewModel) {
     val rows by vm.inbox.collectAsState()
     val categories by vm.categories.collectAsState()
+    val transactions by vm.transactions.collectAsState()
+    val notificationEvents by vm.notificationEvents.collectAsState()
+    val classifierCategories = remember(categories) {
+        categories.map { ClassificationCategory(it.id, it.name, it.categoryType) }
+    }
+    val history = remember(transactions) {
+        transactions.filter { it.status == "confirmed" && it.categoryId != null }
+            .map { ClassificationHistory(it.merchant, it.counterparty, it.item, requireNotNull(it.categoryId)) }
+    }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { Text("待确认箱", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
-        items(rows, key = { it.id }) { item -> CandidateCard(item, categories, vm) }
+        item {
+            Column {
+                Text("待分类账单", style = MaterialTheme.typography.headlineSmall)
+                Text("建议完全在本机计算，确认一次后会记住该商户", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        items(rows, key = { it.id }) { item ->
+            val suggestion = CategoryClassifier.suggest(
+                transactionType = item.transactionType,
+                merchant = item.merchant,
+                counterparty = item.counterparty,
+                item = item.item,
+                note = item.note,
+                categories = classifierCategories,
+                history = history.filter { it.categoryId != item.categoryId },
+            )
+            CandidateCard(
+                item = item,
+                categories = categories,
+                suggestion = suggestion,
+                notificationEvent = notificationEvents.firstOrNull { it.transactionId == item.id },
+                vm = vm,
+            )
+        }
         if (rows.isEmpty()) item { EmptyHint("暂无待确认账单") }
     }
 }
 
 @Composable
-private fun CandidateCard(item: TransactionEntity, categories: List<CategoryEntity>, vm: FinanceViewModel) {
-    val expenseCategories = categories.filter { it.categoryType == TransactionType.EXPENSE.wire }
-    var categoryId by remember(item.id, expenseCategories) { mutableStateOf(item.categoryId ?: expenseCategories.firstOrNull()?.id) }
+private fun CandidateCard(
+    item: TransactionEntity,
+    categories: List<CategoryEntity>,
+    suggestion: CategorySuggestion?,
+    notificationEvent: NotificationEventEntity?,
+    vm: FinanceViewModel,
+) {
+    val matchingCategories = categories.filter { it.categoryType == item.transactionType }
+    var categoryId by remember(item.id, matchingCategories, suggestion) { mutableStateOf(item.categoryId ?: suggestion?.categoryId) }
+    val sourceLabel = candidateSourceLabel(item.sourceType, notificationEvent?.sourcePackage)
+    val title = item.merchant ?: item.counterparty ?: item.item ?: sourceLabel
+    val time = remember(item.occurredAt) {
+        runCatching {
+            Instant.parse(item.occurredAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("M月d日 HH:mm"))
+        }.getOrElse { item.localDate }
+    }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row {
-                Text(item.merchant ?: "自动捕获", Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                Text(MoneyParser.formatCny(item.amountCents), fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Icon(candidateSourceIcon(notificationEvent?.sourcePackage), contentDescription = null, Modifier.padding(9.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("$sourceLabel · $time", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(MoneyParser.formatCny(item.amountCents), style = MaterialTheme.typography.titleMedium)
             }
-            Text("${item.sourceType} · ${item.localDate} · ${item.status}", style = MaterialTheme.typography.bodySmall)
-            Selector("建议分类", expenseCategories, categoryId, { it.id }, { it.name }) { categoryId = it }
+            if (item.merchant == null && item.counterparty == null && item.item == null) {
+                Text(
+                    buildString {
+                        append("原始${if (notificationEvent != null) "通知" else "账单"}未提供商户信息")
+                        notificationEvent?.accountHint?.let { append(" · 账户尾号 $it") }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (suggestion != null) {
+                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.secondaryContainer) {
+                    Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("建议：${suggestion.categoryName}", fontWeight = FontWeight.SemiBold)
+                            Text("${suggestion.reason} · ${(suggestion.confidence * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+            Selector("分类", matchingCategories, categoryId, { it.id }, { it.name }) { categoryId = it }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { vm.confirm(item.id, categoryId) }, enabled = categoryId != null) { Text("分类并确认") }
                 OutlinedButton(onClick = { vm.ignore(item.id) }) { Text("忽略") }
@@ -425,14 +742,50 @@ private fun ReportsScreen(vm: FinanceViewModel) {
         .mapValues { (_, rows) -> rows.sumOf { it.amountCents } }.entries.sortedByDescending { it.value }.take(5)
     val categories by vm.categories.collectAsState()
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Text("本月报表", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
-        item { MetricCard("支出", MoneyParser.formatCny(expense)) }
-        item { MetricCard("收入", MoneyParser.formatCny(income)) }
-        item { MetricCard("净现金流", MoneyParser.formatCny(income - expense)) }
-        if (categoryTotals.isNotEmpty()) item { Text("支出分类 Top 5", style = MaterialTheme.typography.titleMedium) }
+        item {
+            Column {
+                Text("${now.monthValue}月收支分析", style = MaterialTheme.typography.headlineSmall)
+                Text("只统计已经确认的账单", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            ) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Column {
+                        Text("净现金流", color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f))
+                        Text(MoneyParser.formatCny(income - expense), style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                    Row {
+                        ReportMetric("收入", income, MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
+                        ReportMetric("支出", expense, MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+        if (categoryTotals.isNotEmpty()) item { SectionTitle("支出分类") }
         items(categoryTotals.toList()) { entry ->
             val name = categories.firstOrNull { it.id == entry.key }?.name ?: "未分类"
-            ListItem(headlineContent = { Text(name) }, trailingContent = { Text(MoneyParser.formatCny(entry.value)) })
+            Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row {
+                        Text(name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                        Text(MoneyParser.formatCny(entry.value))
+                    }
+                    LinearProgressIndicator(
+                        progress = { (entry.value.toFloat() / expense.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(7.dp),
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    )
+                    Text(
+                        "占本月支出 ${((entry.value.toDouble() / expense.coerceAtLeast(1)) * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
         item {
             Card(Modifier.fillMaxWidth()) {
@@ -447,8 +800,32 @@ private fun ReportsScreen(vm: FinanceViewModel) {
 }
 
 @Composable
-private fun MetricCard(label: String, value: String) = Card(Modifier.fillMaxWidth()) {
-    Row(Modifier.fillMaxWidth().padding(18.dp)) { Text(label, Modifier.weight(1f)); Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+private fun ReportMetric(label: String, value: Long, color: Color, modifier: Modifier = Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(9.dp).background(color, CircleShape))
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(label, style = MaterialTheme.typography.bodySmall)
+            Text(MoneyParser.formatCny(value), style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+private fun candidateSourceLabel(sourceType: String, sourcePackage: String?): String = when {
+    sourcePackage == "com.tencent.mm" || sourceType.contains("wechat", true) -> "微信支付"
+    sourcePackage == "com.eg.android.AlipayGphone" || sourceType.contains("alipay", true) -> "支付宝"
+    sourcePackage == "com.unionpay" || sourceType.contains("unionpay", true) -> "云闪付"
+    sourcePackage?.startsWith("com.bank.") == true || sourceType.contains("bank", true) -> "银行通知"
+    sourceType.contains("import", true) -> "账单导入"
+    sourceType == "notification" -> "支付通知"
+    else -> "${sourceType.replace('_', ' ')}记录"
+}
+
+private fun candidateSourceIcon(sourcePackage: String?) = when (sourcePackage) {
+    "com.tencent.mm" -> Icons.Default.Chat
+    "com.eg.android.AlipayGphone" -> Icons.Default.AccountBalanceWallet
+    "com.unionpay" -> Icons.Default.CreditCard
+    else -> Icons.Default.Notifications
 }
 
 @Composable

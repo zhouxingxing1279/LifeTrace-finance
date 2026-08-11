@@ -41,6 +41,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     val syncState = graph.db.syncDao().stateFlow().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val diagnostics = graph.db.diagnosticDao().recent(200).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val lastNotificationCapture = graph.db.notificationDao().latestCapture().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val notificationEvents = graph.db.notificationDao().recent().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
         viewModelScope.launch {
@@ -51,6 +52,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 graph.auth.currentUserId?.let { _profile.value = repo.activateCloudProfile(it) }
                 SyncScheduler.scheduleNow(application)
             }
+            _profile.value?.let { repo.ensureStandardCategories(it.id) }
         }
     }
 
@@ -117,6 +119,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             repo.activateCloudProfile(cloudUserId)
         }.onSuccess { profile ->
             _profile.value = profile
+            repo.ensureStandardCategories(profile.id)
             _authenticated.value = true
             _message.value = UiMessage("登录成功")
             SyncScheduler.scheduleNow(getApplication())

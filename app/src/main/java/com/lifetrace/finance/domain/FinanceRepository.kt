@@ -2,6 +2,7 @@ package com.lifetrace.finance.domain
 
 import androidx.room.withTransaction
 import com.lifetrace.finance.core.CandidateTransaction
+import com.lifetrace.finance.core.StandardCategories
 import com.lifetrace.finance.core.TransactionStatus
 import com.lifetrace.finance.core.TransactionType
 import com.lifetrace.finance.data.*
@@ -254,6 +255,30 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         return entity.id
     }
 
+    suspend fun ensureStandardCategories(profileId: String) {
+        val existing = finance.categoryList(profileId)
+            .map { "${it.categoryType}|${it.name.trim()}" }
+            .toSet()
+        val missing = StandardCategories.ALL.filter { "${it.type.wire}|${it.name}" !in existing }
+        if (missing.isEmpty()) return
+        val now = Instant.now().toString()
+        db.withTransaction {
+            missing.forEach { spec ->
+                val entity = CategoryEntity(
+                    id = UUID.randomUUID().toString(),
+                    localProfileId = profileId,
+                    name = spec.name,
+                    categoryType = spec.type.wire,
+                    isSystem = true,
+                    createdAt = now,
+                    updatedAt = now,
+                )
+                finance.upsertCategory(entity)
+                sync.enqueue(outboxFor(entity))
+            }
+        }
+    }
+
     suspend fun archiveAccount(id: String) {
         val current = finance.accountById(id) ?: return
         if (current.isArchived) return
@@ -285,12 +310,20 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
     private suspend fun seedDefaults(profileId: String) {
         val now = Instant.now().toString()
         val account = AccountEntity(UUID.randomUUID().toString(), profileId, "默认账户", "other", createdAt = now, updatedAt = now)
-        val food = CategoryEntity(UUID.randomUUID().toString(), profileId, "餐饮", TransactionType.EXPENSE.wire, isSystem = true, createdAt = now, updatedAt = now)
-        val salary = CategoryEntity(UUID.randomUUID().toString(), profileId, "工资", TransactionType.INCOME.wire, isSystem = true, createdAt = now, updatedAt = now)
+        val categories = StandardCategories.ALL.map { spec ->
+            CategoryEntity(
+                id = UUID.randomUUID().toString(),
+                localProfileId = profileId,
+                name = spec.name,
+                categoryType = spec.type.wire,
+                isSystem = true,
+                createdAt = now,
+                updatedAt = now,
+            )
+        }
         db.withTransaction {
             finance.upsertAccount(account); sync.enqueue(outboxFor(account))
-            finance.upsertCategory(food); sync.enqueue(outboxFor(food))
-            finance.upsertCategory(salary); sync.enqueue(outboxFor(salary))
+            categories.forEach { category -> finance.upsertCategory(category); sync.enqueue(outboxFor(category)) }
         }
     }
 

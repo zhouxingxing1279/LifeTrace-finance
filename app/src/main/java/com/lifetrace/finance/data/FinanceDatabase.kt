@@ -202,7 +202,7 @@ interface FinanceDao {
     @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND deleted_at IS NULL ORDER BY occurred_at DESC")
     fun transactions(profileId: String): Flow<List<TransactionEntity>>
 
-    @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND status IN ('candidate','provisional') AND deleted_at IS NULL ORDER BY occurred_at DESC")
+    @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND deleted_at IS NULL AND (status IN ('candidate','provisional') OR (category_id IS NULL AND transaction_type NOT IN ('transfer','refund'))) ORDER BY occurred_at DESC")
     fun inbox(profileId: String): Flow<List<TransactionEntity>>
 
     @Query("SELECT * FROM finance_accounts WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 ORDER BY name")
@@ -210,6 +210,9 @@ interface FinanceDao {
 
     @Query("SELECT * FROM finance_categories WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 ORDER BY name")
     fun categories(profileId: String): Flow<List<CategoryEntity>>
+
+    @Query("SELECT * FROM finance_categories WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 ORDER BY name")
+    suspend fun categoryList(profileId: String): List<CategoryEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTransaction(value: TransactionEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertAccount(value: AccountEntity)
@@ -288,6 +291,7 @@ interface NotificationDao {
     @Query("DELETE FROM notification_events WHERE captured_at < :cutoff") suspend fun deleteBefore(cutoff: String)
     @Query("DELETE FROM notification_events") suspend fun clearAll()
     @Query("SELECT captured_at FROM notification_events ORDER BY captured_at DESC LIMIT 1") fun latestCapture(): Flow<String?>
+    @Query("SELECT * FROM notification_events ORDER BY captured_at DESC LIMIT :limit") fun recent(limit: Int = 200): Flow<List<NotificationEventEntity>>
 }
 
 @Dao
