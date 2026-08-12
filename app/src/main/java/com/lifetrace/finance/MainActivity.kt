@@ -4,10 +4,14 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lifetrace.finance.sync.RecurringScheduler
 import com.lifetrace.finance.sync.SyncScheduler
 import com.lifetrace.finance.ui.FinanceViewModel
+import com.lifetrace.finance.ui.LedgerContextBar
 import com.lifetrace.finance.ui.LifeTraceFinanceApp
 import com.lifetrace.finance.ui.LifeTraceTheme
 
@@ -26,7 +30,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             LifeTraceTheme {
                 val vm: FinanceViewModel = viewModel()
-                LifeTraceFinanceApp(vm, initialDestination = initial, sharedText = sharedText, initialTransactionType = initialTransactionType)
+                Column {
+                    LedgerContextBar(vm)
+                    Box(Modifier.weight(1f)) {
+                        LifeTraceFinanceApp(
+                            vm,
+                            initialDestination = initial,
+                            sharedText = sharedText,
+                            initialTransactionType = initialTransactionType,
+                        )
+                    }
+                }
             }
         }
     }
