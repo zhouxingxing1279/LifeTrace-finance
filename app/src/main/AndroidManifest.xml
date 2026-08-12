@@ -32,6 +32,22 @@
         </activity>
 
         <activity
+            android:name=".ui.AiSettingsActivity"
+            android:exported="true"
+            android:label="智能截图记账设置">
+            <intent-filter>
+                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lifetrace-finance" android:host="ai-settings" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".platform.ShareReceiverActivity"
             android:exported="true"
             android:theme="@style/Theme.LifeTraceFinance.Transparent">
