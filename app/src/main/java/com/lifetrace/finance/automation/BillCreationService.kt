@@ -7,10 +7,13 @@ import com.lifetrace.finance.core.TransactionStatus
 import com.lifetrace.finance.core.TransactionType
 import com.lifetrace.finance.data.AccountEntity
 import com.lifetrace.finance.data.CategoryEntity
+import com.lifetrace.finance.data.TransactionEntity
 import com.lifetrace.finance.domain.FinanceRepository
 import kotlinx.coroutines.flow.first
+import java.time.Duration
 import java.time.Instant
 import java.util.Locale
+import kotlin.math.abs
 
 data class BillCreationResult(
     val transactionIds: List<String>,
@@ -24,11 +27,17 @@ class BillCreationService(
     suspend fun createBills(profileId: String, bills: List<BillInfo>, sourceType: String): BillCreationResult {
         val accounts = finance.accounts(profileId).first()
         val categories = finance.categories(profileId).first()
+        val existingTransactions = finance.transactions(profileId).first()
+        val consumedNotificationIds = mutableSetOf<String>()
         val classifierCategories = categories.map { ClassificationCategory(it.id, it.name, it.categoryType) }
         val created = mutableListOf<String>()
         var skipped = 0
 
         for (bill in bills) {
+            if (isExistingExternalTransaction(bill, existingTransactions)) {
+                skipped++
+                continue
+            }
             val sourceAccount = resolveAccount(
                 if (bill.type == TransactionType.TRANSFER) bill.fromAccount else bill.account,
                 accounts,
@@ -48,6 +57,13 @@ class BillCreationService(
                     append("账户提示：${bill.account}")
                 }
             }.ifBlank { null }
+            val occurredAt = bill.occurredAt ?: Instant.now()
+            val notificationCandidate = findNotificationCandidate(
+                bill = bill,
+                occurredAt = occurredAt,
+                existing = existingTransactions,
+                consumedIds = consumedNotificationIds,
+            )
 
             val id = runCatching {
                 finance.createTransaction(
@@ -62,12 +78,43 @@ class BillCreationService(
                     status = status,
                     sourceType = sourceType,
                     externalTransactionId = bill.externalTransactionId,
-                    occurredAt = bill.occurredAt ?: Instant.now(),
+                    occurredAt = occurredAt,
                 )
             }.getOrNull()
-            if (id == null) skipped++ else created += id
+            if (id == null) {
+                skipped++
+            } else {
+                created += id
+                if (notificationCandidate != null) {
+                    finance.ignoreCandidate(notificationCandidate.id)
+                    consumedNotificationIds += notificationCandidate.id
+                }
+            }
         }
         return BillCreationResult(created, skipped)
+    }
+
+    private fun isExistingExternalTransaction(bill: BillInfo, existing: List<TransactionEntity>): Boolean {
+        val externalId = bill.externalTransactionId?.takeIf(String::isNotBlank) ?: return false
+        return existing.any { it.deletedAt == null && it.status != TransactionStatus.IGNORED.wire && it.externalTransactionId == externalId }
+    }
+
+    private fun findNotificationCandidate(
+        bill: BillInfo,
+        occurredAt: Instant,
+        existing: List<TransactionEntity>,
+        consumedIds: Set<String>,
+    ): TransactionEntity? {
+        if (bill.type != TransactionType.EXPENSE) return null
+        return existing.asSequence()
+            .filter { it.id !in consumedIds }
+            .filter { it.deletedAt == null && it.sourceType == "notification" }
+            .filter { it.status == TransactionStatus.CANDIDATE.wire || it.status == TransactionStatus.PROVISIONAL.wire }
+            .filter { it.amountCents == bill.amountCents }
+            .mapNotNull { tx -> runCatching { Instant.parse(tx.occurredAt) }.getOrNull()?.let { tx to it } }
+            .filter { (_, time) -> abs(Duration.between(time, occurredAt).seconds) <= 5 * 60 }
+            .minByOrNull { (_, time) -> abs(Duration.between(time, occurredAt).seconds) }
+            ?.first
     }
 
     private fun resolveCategory(
