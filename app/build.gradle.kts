@@ -23,8 +23,8 @@ android {
         applicationId = "com.lifetrace.finance"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.environmentVariable("LIFETRACE_FINANCE_VERSION_CODE").orNull?.toIntOrNull() ?: 1
-        versionName = providers.environmentVariable("LIFETRACE_FINANCE_VERSION_NAME").orNull ?: "0.1.0"
+        versionCode = providers.environmentVariable("LIFETRACE_FINANCE_VERSION_CODE").orNull?.toIntOrNull() ?: 2
+        versionName = providers.environmentVariable("LIFETRACE_FINANCE_VERSION_NAME").orNull ?: "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "LIFETRACE_APP_ID", "\"lifetrace-finance-android\"")
