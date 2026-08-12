@@ -26,6 +26,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     val message = _message.asStateFlow()
     private val _authenticated = MutableStateFlow(graph.auth.currentUserId != null)
     val authenticated = _authenticated.asStateFlow()
+    val smartCaptureState = graph.autoBilling.state
 
     val transactions: StateFlow<List<TransactionEntity>> = _profile.filterNotNull()
         .flatMapLatest { repo.transactions(it.id) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -53,6 +54,12 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 SyncScheduler.scheduleNow(application)
             }
             _profile.value?.let { repo.ensureStandardCategories(it.id) }
+        }
+        viewModelScope.launch {
+            smartCaptureState.drop(1).collect { state ->
+                state.lastError?.let { _message.value = UiMessage("截图识别失败：$it", true) }
+                state.lastMessage?.let { _message.value = UiMessage(it) }
+            }
         }
     }
 
@@ -153,6 +160,56 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             .onFailure { _message.value = UiMessage(it.message ?: "服务器地址无效", true) }
     }
     fun baseUrl(): String = graph.settings.baseUrl
+
+    fun aiBaseUrl(): String = graph.aiSettings.baseUrl
+    fun aiVisionModel(): String = graph.aiSettings.visionModel
+    fun aiHasApiKey(): Boolean = graph.aiSecrets.hasApiKey()
+    fun screenshotMonitorEnabled(): Boolean = graph.screenshotMonitor.isEnabled()
+    fun screenshotMonitorRunning(): Boolean = graph.screenshotMonitor.isRunning()
+    fun hasScreenshotPermission(): Boolean = graph.screenshotMonitor.hasMediaPermission()
+    fun screenshotPermission(): String = graph.screenshotMonitor.requiredPermission()
+
+    fun saveAiSettings(baseUrl: String, model: String, apiKey: String?) {
+        runCatching {
+            graph.aiSettings.baseUrl = baseUrl
+            graph.aiSettings.visionModel = model
+            if (!apiKey.isNullOrBlank()) graph.aiSecrets.saveApiKey(apiKey)
+        }.onSuccess {
+            _message.value = UiMessage("Vision 配置已保存；API Key 仅加密保存在本机")
+        }.onFailure {
+            _message.value = UiMessage(it.message ?: "Vision 配置保存失败", true)
+        }
+    }
+
+    fun clearAiApiKey() {
+        graph.aiSecrets.saveApiKey(null)
+        graph.screenshotMonitor.stop()
+        _message.value = UiMessage("Vision API Key 已从本机删除")
+    }
+
+    fun setScreenshotMonitorEnabled(enabled: Boolean) {
+        if (!enabled) {
+            graph.screenshotMonitor.stop()
+            _message.value = UiMessage("自动截图监听已关闭；分享图片记账仍可使用")
+            return
+        }
+        if (!graph.aiProviderFactory.isVisionConfigured()) {
+            _message.value = UiMessage("请先保存 Vision API Key", true)
+            return
+        }
+        if (graph.screenshotMonitor.start()) _message.value = UiMessage("自动截图监听已开启")
+        else _message.value = UiMessage("需要图片读取权限才能开启自动截图监听", true)
+    }
+
+    fun onScreenshotPermissionResult(granted: Boolean) {
+        if (granted && graph.screenshotMonitor.start()) _message.value = UiMessage("图片权限已授予，自动截图监听已开启")
+        else _message.value = UiMessage("未获得图片权限；可继续通过系统分享截图记账", true)
+    }
+
+    fun clearProcessedScreenshots() {
+        graph.processedImages.clear()
+        _message.value = UiMessage("已清空截图去重缓存")
+    }
 
     fun clearNotificationCache() = viewModelScope.launch {
         graph.db.notificationDao().clearAll()
