@@ -20,8 +20,8 @@ class LaunchTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
     @Test fun appLaunchesIntoQuickEntry() {
-        rule.onNodeWithText("LifeTrace Finance").assertIsDisplayed()
-        rule.onNodeWithText("快速记账").assertIsDisplayed()
+        rule.onNodeWithText("今天记一笔").assertIsDisplayed()
+        rule.onNodeWithTag("quick_amount").assertIsDisplayed()
     }
 
     @Test fun quickExpenseCommitsWithinThreeSecondsOnceReady() {
@@ -41,9 +41,9 @@ class LaunchTest {
     }
 
     @Test fun searchAndAccountTypeControlsAreReachable() {
-        rule.onNodeWithText("账单").performClick()
+        rule.onNodeWithText("明细").performClick()
         rule.onNodeWithTag("transaction_search").assertIsDisplayed()
-        rule.onNodeWithText("账户").performClick()
+        rule.onNodeWithText("我的").performClick()
         rule.onNodeWithText("账户类型：其他").assertIsDisplayed()
     }
 
@@ -74,7 +74,7 @@ class LaunchTest {
             )
         }
 
-        rule.onNodeWithText("账单").performClick()
+        rule.onNodeWithText("明细").performClick()
         rule.waitUntil(5_000) {
             rule.onAllNodesWithText("回归测试麦当劳").fetchSemanticsNodes().isNotEmpty() &&
                 rule.onAllNodesWithText("回归测试招商银行", substring = true).fetchSemanticsNodes().isNotEmpty()
