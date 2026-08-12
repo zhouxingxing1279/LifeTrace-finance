@@ -156,7 +156,22 @@ interface BookkeepingDao {
     fun ledgers(profileId: String): Flow<List<LedgerEntity>>
 
     @Query("SELECT * FROM finance_ledgers WHERE id=:id LIMIT 1") suspend fun ledgerById(id: String): LedgerEntity?
-    @Query("SELECT * FROM finance_ledgers WHERE local_profile_id=:profileId AND deleted_at IS NULL ORDER BY sort_order, created_at LIMIT 1")
+
+    /**
+     * Returns a ledger that is already known by the cloud or already has a
+     * pending LifeTrace outbox change. A v1->v2 migration-created default
+     * ledger has neither, so FinanceRepository.ensureDefaultLedger() will
+     * deterministically upsert the same ID and enqueue it once.
+     */
+    @Query(
+        """SELECT * FROM finance_ledgers l
+           WHERE l.local_profile_id=:profileId AND l.deleted_at IS NULL
+             AND (l.server_version IS NOT NULL OR EXISTS (
+                 SELECT 1 FROM sync_outbox o
+                 WHERE o.entity_type='finance.ledger' AND o.entity_id=l.id AND o.state='pending'
+             ))
+           ORDER BY l.sort_order, l.created_at LIMIT 1""",
+    )
     suspend fun firstLedger(profileId: String): LedgerEntity?
 
     @Query("SELECT * FROM finance_tags WHERE local_profile_id=:profileId AND ledger_id=:ledgerId AND deleted_at IS NULL AND is_archived=0 ORDER BY sort_order, name")
