@@ -247,7 +247,7 @@ private fun HomeScreen(
         } else {
             items(recentRows, key = { it.id }) { item ->
                 val category = categories.firstOrNull { it.id == item.categoryId }?.name
-                CompactTransactionRow(item, category)
+                CompactTransactionRow(item, category, presentTransaction(item, accounts, category ?: "未分类账单"))
             }
         }
     }
@@ -285,7 +285,7 @@ private fun SectionTitle(title: String, action: String? = null, onAction: (() ->
 }
 
 @Composable
-private fun CompactTransactionRow(item: TransactionEntity, category: String?) {
+private fun CompactTransactionRow(item: TransactionEntity, category: String?, presentation: TransactionPresentation) {
     Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
@@ -298,8 +298,14 @@ private fun CompactTransactionRow(item: TransactionEntity, category: String?) {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(item.merchant ?: item.counterparty ?: category ?: "未分类账单", fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${category ?: "未分类"} · ${item.localDate}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(presentation.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOfNotNull(presentation.accountLine, category ?: "未分类", item.localDate).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Text(
                 "${if (item.transactionType == "income") "+" else "−"}${MoneyParser.formatCny(item.amountCents)}",
@@ -435,14 +441,18 @@ private fun <T> Selector(label: String, values: List<T>, selected: String?, id: 
 private fun TransactionsScreen(vm: FinanceViewModel) {
     val rows by vm.transactions.collectAsState()
     val categories by vm.categories.collectAsState()
+    val accounts by vm.accounts.collectAsState()
     var editing by remember { mutableStateOf<TransactionEntity?>(null) }
     var query by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf<String?>(null) }
-    val filteredRows = remember(rows, query, typeFilter) {
+    val filteredRows = remember(rows, accounts, query, typeFilter) {
         val needle = query.trim()
         rows.filter { item ->
+            val presentation = presentTransaction(item, accounts)
             val typeMatches = typeFilter == null || item.transactionType == typeFilter
             val searchMatches = needle.isBlank() || listOfNotNull(
+                presentation.title,
+                presentation.accountLine,
                 item.merchant,
                 item.counterparty,
                 item.item,
@@ -462,7 +472,7 @@ private fun TransactionsScreen(vm: FinanceViewModel) {
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth().testTag("transaction_search"),
-                label = { Text("搜索商户、备注、日期或金额") },
+                label = { Text("搜索商户、商品、账户、备注、日期或金额") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (query.isNotBlank()) {
@@ -488,14 +498,18 @@ private fun TransactionsScreen(vm: FinanceViewModel) {
             )
         }
         items(filteredRows, key = { it.id }) { item ->
-            TransactionRow(item, categories.firstOrNull { it.id == item.categoryId }?.name) { editing = item }
+            val categoryName = categories.firstOrNull { it.id == item.categoryId }?.name
+            val presentation = presentTransaction(item, accounts, categoryName ?: "未分类账单")
+            TransactionRow(item, categoryName, presentation) { editing = item }
         }
         if (filteredRows.isEmpty()) item { EmptyHint(if (rows.isEmpty()) "暂无账单" else "没有匹配的账单") }
     }
     editing?.let { item ->
+        val presentation = presentTransaction(item, accounts)
         EditTransactionDialog(
             item,
             categories,
+            presentation.accountLine,
             onDismiss = { editing = null },
             onSave = { amount, categoryId, merchant, note -> vm.updateTransaction(item.id, amount, categoryId, merchant, note); editing = null },
             onDelete = { vm.deleteTransaction(item.id); editing = null },
@@ -504,7 +518,7 @@ private fun TransactionsScreen(vm: FinanceViewModel) {
 }
 
 @Composable
-private fun TransactionRow(item: TransactionEntity, categoryName: String?, onClick: () -> Unit) {
+private fun TransactionRow(item: TransactionEntity, categoryName: String?, presentation: TransactionPresentation, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium,
@@ -522,8 +536,14 @@ private fun TransactionRow(item: TransactionEntity, categoryName: String?, onCli
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(item.merchant ?: item.counterparty ?: item.note ?: categoryName ?: "未分类账单", fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${categoryName ?: "未分类"} · ${item.localDate}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(presentation.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOfNotNull(presentation.accountLine, categoryName ?: "未分类", item.localDate).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Text(
                 "${if (item.transactionType == "income") "+" else if (item.transactionType == "expense") "−" else ""}${MoneyParser.formatCny(item.amountCents)}",
@@ -535,9 +555,9 @@ private fun TransactionRow(item: TransactionEntity, categoryName: String?, onCli
 }
 
 @Composable
-private fun EditTransactionDialog(item: TransactionEntity, categories: List<CategoryEntity>, onDismiss: () -> Unit, onSave: (String, String?, String?, String?) -> Unit, onDelete: () -> Unit) {
+private fun EditTransactionDialog(item: TransactionEntity, categories: List<CategoryEntity>, accountLine: String?, onDismiss: () -> Unit, onSave: (String, String?, String?, String?) -> Unit, onDelete: () -> Unit) {
     var amount by remember { mutableStateOf(MoneyParser.formatPlain(item.amountCents)) }
-    var merchant by remember { mutableStateOf(item.merchant.orEmpty()) }
+    var merchant by remember { mutableStateOf(firstNonBlank(item.merchant, item.counterparty, item.item).orEmpty()) }
     var note by remember { mutableStateOf(item.note.orEmpty()) }
     var categoryId by remember { mutableStateOf(item.categoryId) }
     AlertDialog(
@@ -545,6 +565,9 @@ private fun EditTransactionDialog(item: TransactionEntity, categories: List<Cate
         title = { Text("编辑账单") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                accountLine?.let {
+                    Text("账户：$it", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 OutlinedTextField(amount, { amount = it }, label = { Text("金额") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
                 if (item.transactionType != "transfer") Selector("分类", categories.filter { it.categoryType == item.transactionType }, categoryId, { it.id }, { it.name }) { categoryId = it }
                 OutlinedTextField(merchant, { merchant = it }, label = { Text("商户/对方") }, singleLine = true)
@@ -610,7 +633,7 @@ private fun CandidateCard(
     val matchingCategories = categories.filter { it.categoryType == item.transactionType }
     var categoryId by remember(item.id, matchingCategories, suggestion) { mutableStateOf(item.categoryId ?: suggestion?.categoryId) }
     val sourceLabel = candidateSourceLabel(item.sourceType, notificationEvent?.sourcePackage)
-    val title = item.merchant ?: item.counterparty ?: item.item ?: sourceLabel
+    val title = firstNonBlank(item.merchant, item.counterparty, item.item, item.note) ?: sourceLabel
     val time = remember(item.occurredAt) {
         runCatching {
             Instant.parse(item.occurredAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("M月d日 HH:mm"))
@@ -629,7 +652,7 @@ private fun CandidateCard(
                 }
                 Text(MoneyParser.formatCny(item.amountCents), style = MaterialTheme.typography.titleMedium)
             }
-            if (item.merchant == null && item.counterparty == null && item.item == null) {
+            if (firstNonBlank(item.merchant, item.counterparty, item.item, item.note) == null) {
                 Text(
                     buildString {
                         append("原始${if (notificationEvent != null) "通知" else "账单"}未提供商户信息")
