@@ -7,9 +7,15 @@ object LifeTraceContract {
     const val SCHEMA_VERSION = 1
 
     val FINANCE_ENTITY_TYPES = setOf(
+        "finance.ledger",
         "finance.account",
         "finance.category",
         "finance.transaction",
+        "finance.recurring_transaction",
+        "finance.tag",
+        "finance.transaction_tag",
+        "finance.budget",
+        "finance.transaction_attachment",
         "finance.transaction_evidence",
     )
 
@@ -43,6 +49,7 @@ data class FinanceTransaction(
     val type: TransactionType,
     val amountCents: Long,
     val currency: String = "CNY",
+    val ledgerId: String? = null,
     val accountId: String? = null,
     val toAccountId: String? = null,
     val categoryId: String? = null,
@@ -55,6 +62,12 @@ data class FinanceTransaction(
     val status: TransactionStatus = TransactionStatus.CONFIRMED,
     val sourceType: String = "manual",
     val externalTransactionId: String? = null,
+    val recurringTransactionId: String? = null,
+    val excludeFromStats: Boolean = false,
+    val excludeFromBudget: Boolean = false,
+    val nativeAmountCents: Long? = null,
+    val nativeCurrency: String? = null,
+    val exchangeRate: String? = null,
     val localVersion: Long = 1,
     val serverVersion: String? = null,
     val deletedAt: String? = null,
@@ -66,6 +79,7 @@ fun validateTransaction(tx: FinanceTransaction) {
     require(tx.amountCents >= 0) { "amount must be non-negative" }
     require(tx.localDate.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) { "localDate must be YYYY-MM-DD" }
     require(tx.currency.matches(Regex("[A-Z]{3}")))
+    tx.nativeCurrency?.let { require(it.matches(Regex("[A-Z]{3}"))) }
     if (tx.type == TransactionType.TRANSFER) {
         require(!tx.accountId.isNullOrBlank())
         require(!tx.toAccountId.isNullOrBlank())

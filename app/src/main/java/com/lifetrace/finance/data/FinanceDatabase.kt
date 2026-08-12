@@ -2,6 +2,8 @@ package com.lifetrace.finance.data
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "local_profiles")
@@ -19,10 +21,18 @@ data class ActiveProfileEntity(
     @ColumnInfo(name = "profile_id") val profileId: String,
 )
 
-@Entity(tableName = "finance_accounts", indices = [Index("local_profile_id"), Index(value = ["local_profile_id", "name"])])
+@Entity(
+    tableName = "finance_accounts",
+    indices = [
+        Index("local_profile_id"),
+        Index("ledger_id"),
+        Index(value = ["local_profile_id", "name"]),
+    ],
+)
 data class AccountEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "local_profile_id") val localProfileId: String,
+    @ColumnInfo(name = "ledger_id") val ledgerId: String? = null,
     val name: String,
     @ColumnInfo(name = "account_type") val accountType: String,
     @ColumnInfo(name = "opening_balance_cents") val openingBalanceCents: Long? = null,
@@ -32,6 +42,13 @@ data class AccountEntity(
     val icon: String = "wallet",
     @ColumnInfo(name = "is_archived") val isArchived: Boolean = false,
     val currency: String = "CNY",
+    @ColumnInfo(name = "sort_order", defaultValue = "0") val sortOrder: Int = 0,
+    @ColumnInfo(name = "credit_limit_cents") val creditLimitCents: Long? = null,
+    @ColumnInfo(name = "billing_day") val billingDay: Int? = null,
+    @ColumnInfo(name = "payment_due_day") val paymentDueDay: Int? = null,
+    @ColumnInfo(name = "bank_name") val bankName: String? = null,
+    val note: String? = null,
+    @ColumnInfo(name = "is_hidden", defaultValue = "0") val isHidden: Boolean = false,
     @ColumnInfo(name = "created_at") val createdAt: String,
     @ColumnInfo(name = "updated_at") val updatedAt: String,
     @ColumnInfo(name = "deleted_at") val deletedAt: String? = null,
@@ -39,10 +56,14 @@ data class AccountEntity(
     @ColumnInfo(name = "server_version") val serverVersion: String? = null,
 )
 
-@Entity(tableName = "finance_categories", indices = [Index("local_profile_id"), Index("parent_id")])
+@Entity(
+    tableName = "finance_categories",
+    indices = [Index("local_profile_id"), Index("ledger_id"), Index("parent_id")],
+)
 data class CategoryEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "local_profile_id") val localProfileId: String,
+    @ColumnInfo(name = "ledger_id") val ledgerId: String? = null,
     val name: String,
     @ColumnInfo(name = "category_type") val categoryType: String,
     @ColumnInfo(name = "parent_id") val parentId: String? = null,
@@ -50,6 +71,10 @@ data class CategoryEntity(
     val color: String? = null,
     @ColumnInfo(name = "is_system") val isSystem: Boolean = false,
     @ColumnInfo(name = "is_archived") val isArchived: Boolean = false,
+    @ColumnInfo(name = "sort_order", defaultValue = "0") val sortOrder: Int = 0,
+    @ColumnInfo(name = "level", defaultValue = "1") val level: Int = 1,
+    @ColumnInfo(name = "icon_type", defaultValue = "'material'") val iconType: String = "material",
+    @ColumnInfo(name = "custom_icon_file_id") val customIconFileId: String? = null,
     @ColumnInfo(name = "created_at") val createdAt: String,
     @ColumnInfo(name = "updated_at") val updatedAt: String,
     @ColumnInfo(name = "deleted_at") val deletedAt: String? = null,
@@ -62,15 +87,18 @@ data class CategoryEntity(
     indices = [
         Index(value = ["local_profile_id", "local_date"]),
         Index(value = ["local_profile_id", "occurred_at"]),
+        Index(value = ["local_profile_id", "ledger_id", "local_date"]),
         Index(value = ["local_profile_id", "account_id", "occurred_at"]),
         Index(value = ["local_profile_id", "category_id", "local_date"]),
         Index(value = ["local_profile_id", "status", "occurred_at"]),
         Index(value = ["local_profile_id", "external_transaction_id"]),
+        Index("recurring_transaction_id"),
     ],
 )
 data class TransactionEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "local_profile_id") val localProfileId: String,
+    @ColumnInfo(name = "ledger_id") val ledgerId: String? = null,
     @ColumnInfo(name = "transaction_type") val transactionType: String,
     @ColumnInfo(name = "amount_cents") val amountCents: Long,
     val currency: String = "CNY",
@@ -86,6 +114,12 @@ data class TransactionEntity(
     val status: String,
     @ColumnInfo(name = "source_type") val sourceType: String,
     @ColumnInfo(name = "external_transaction_id") val externalTransactionId: String? = null,
+    @ColumnInfo(name = "recurring_transaction_id") val recurringTransactionId: String? = null,
+    @ColumnInfo(name = "exclude_from_stats", defaultValue = "0") val excludeFromStats: Boolean = false,
+    @ColumnInfo(name = "exclude_from_budget", defaultValue = "0") val excludeFromBudget: Boolean = false,
+    @ColumnInfo(name = "native_amount_cents") val nativeAmountCents: Long? = null,
+    @ColumnInfo(name = "native_currency") val nativeCurrency: String? = null,
+    @ColumnInfo(name = "exchange_rate") val exchangeRate: String? = null,
     @ColumnInfo(name = "created_at") val createdAt: String,
     @ColumnInfo(name = "updated_at") val updatedAt: String,
     @ColumnInfo(name = "deleted_at") val deletedAt: String? = null,
@@ -205,13 +239,13 @@ interface FinanceDao {
     @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND deleted_at IS NULL AND (status IN ('candidate','provisional') OR (category_id IS NULL AND transaction_type NOT IN ('transfer','refund'))) ORDER BY occurred_at DESC")
     fun inbox(profileId: String): Flow<List<TransactionEntity>>
 
-    @Query("SELECT * FROM finance_accounts WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 ORDER BY name")
+    @Query("SELECT * FROM finance_accounts WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 AND is_hidden=0 ORDER BY sort_order, name")
     fun accounts(profileId: String): Flow<List<AccountEntity>>
 
-    @Query("SELECT * FROM finance_categories WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 ORDER BY name")
+    @Query("SELECT * FROM finance_categories WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 ORDER BY sort_order, level, name")
     fun categories(profileId: String): Flow<List<CategoryEntity>>
 
-    @Query("SELECT * FROM finance_categories WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 ORDER BY name")
+    @Query("SELECT * FROM finance_categories WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 ORDER BY sort_order, level, name")
     suspend fun categoryList(profileId: String): List<CategoryEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTransaction(value: TransactionEntity)
@@ -233,39 +267,35 @@ interface FinanceDao {
     @Query("UPDATE finance_categories SET deleted_at=:deletedAt, server_version=:version WHERE id=:id") suspend fun remoteDeleteCategory(id: String, deletedAt: String, version: String)
     @Query("UPDATE finance_transaction_evidence SET deleted_at=:deletedAt, server_version=:version WHERE id=:id") suspend fun remoteDeleteEvidence(id: String, deletedAt: String, version: String)
 
-    @Query("SELECT COALESCE(SUM(CASE WHEN transaction_type='expense' THEN amount_cents ELSE 0 END),0) FROM finance_transactions WHERE local_profile_id=:profileId AND local_date BETWEEN :from AND :to AND deleted_at IS NULL AND status='confirmed'")
+    @Query("SELECT COALESCE(SUM(CASE WHEN transaction_type='expense' THEN COALESCE(native_amount_cents, amount_cents) ELSE 0 END),0) FROM finance_transactions WHERE local_profile_id=:profileId AND local_date BETWEEN :from AND :to AND deleted_at IS NULL AND status='confirmed' AND exclude_from_stats=0")
     fun expenseTotal(profileId: String, from: String, to: String): Flow<Long>
 
-    @Query("SELECT COALESCE(SUM(CASE WHEN transaction_type='income' THEN amount_cents ELSE 0 END),0) FROM finance_transactions WHERE local_profile_id=:profileId AND local_date BETWEEN :from AND :to AND deleted_at IS NULL AND status='confirmed'")
+    @Query("SELECT COALESCE(SUM(CASE WHEN transaction_type='income' THEN COALESCE(native_amount_cents, amount_cents) ELSE 0 END),0) FROM finance_transactions WHERE local_profile_id=:profileId AND local_date BETWEEN :from AND :to AND deleted_at IS NULL AND status='confirmed' AND exclude_from_stats=0")
     fun incomeTotal(profileId: String, from: String, to: String): Flow<Long>
+
+    @Query("SELECT COALESCE(SUM(COALESCE(native_amount_cents, amount_cents)),0) FROM finance_transactions WHERE local_profile_id=:profileId AND ledger_id=:ledgerId AND category_id=:categoryId AND local_date BETWEEN :from AND :to AND transaction_type='expense' AND status='confirmed' AND deleted_at IS NULL AND exclude_from_budget=0")
+    fun categoryBudgetUsage(profileId: String, ledgerId: String, categoryId: String, from: String, to: String): Flow<Long>
+
+    @Query("SELECT COALESCE(SUM(COALESCE(native_amount_cents, amount_cents)),0) FROM finance_transactions WHERE local_profile_id=:profileId AND ledger_id=:ledgerId AND local_date BETWEEN :from AND :to AND transaction_type='expense' AND status='confirmed' AND deleted_at IS NULL AND exclude_from_budget=0")
+    fun totalBudgetUsage(profileId: String, ledgerId: String, from: String, to: String): Flow<Long>
 }
 
 @Dao
 interface SyncDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun enqueue(value: OutboxEntity)
-
-    @Query("SELECT * FROM sync_outbox WHERE state='pending' AND next_attempt_at<=:now ORDER BY client_modified_at LIMIT :limit")
-    suspend fun pending(now: Long, limit: Int): List<OutboxEntity>
-
-    @Query("SELECT COUNT(*) FROM sync_outbox WHERE state='pending' AND entity_type=:entityType AND entity_id=:entityId")
-    suspend fun pendingForEntity(entityType: String, entityId: String): Int
-
+    @Query("SELECT * FROM sync_outbox WHERE state='pending' AND next_attempt_at<=:now ORDER BY client_modified_at LIMIT :limit") suspend fun pending(now: Long, limit: Int): List<OutboxEntity>
+    @Query("SELECT COUNT(*) FROM sync_outbox WHERE state='pending' AND entity_type=:entityType AND entity_id=:entityId") suspend fun pendingForEntity(entityType: String, entityId: String): Int
     @Query("DELETE FROM sync_outbox WHERE change_id=:changeId") suspend fun ack(changeId: String)
-
-    @Query("UPDATE sync_outbox SET attempts=attempts+1, next_attempt_at=:nextAt, last_error=:error WHERE change_id=:changeId")
-    suspend fun retry(changeId: String, nextAt: Long, error: String?)
-
+    @Query("UPDATE sync_outbox SET attempts=attempts+1, next_attempt_at=:nextAt, last_error=:error WHERE change_id=:changeId") suspend fun retry(changeId: String, nextAt: Long, error: String?)
     @Query("SELECT COUNT(*) FROM sync_outbox WHERE state='pending'") fun pendingCount(): Flow<Int>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveState(value: SyncStateEntity)
     @Query("SELECT * FROM sync_state WHERE id='default' LIMIT 1") suspend fun state(): SyncStateEntity?
     @Query("SELECT * FROM sync_state WHERE id='default' LIMIT 1") fun stateFlow(): Flow<SyncStateEntity?>
-
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveConflict(value: ConflictEntity)
     @Query("SELECT COUNT(*) FROM sync_conflicts WHERE resolution_state='pending'") fun conflictCount(): Flow<Int>
     @Query("SELECT * FROM sync_conflicts WHERE resolution_state='pending' ORDER BY created_at DESC") fun conflicts(): Flow<List<ConflictEntity>>
     @Query("SELECT * FROM sync_conflicts WHERE conflict_id=:id LIMIT 1") suspend fun conflict(id: String): ConflictEntity?
     @Query("UPDATE sync_conflicts SET resolution_state=:state WHERE conflict_id=:id") suspend fun markConflict(id: String, state: String)
-
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveSnapshotProgress(value: SnapshotProgressEntity)
     @Query("SELECT * FROM snapshot_progress WHERE id='default' LIMIT 1") suspend fun snapshotProgress(): SnapshotProgressEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun stageSnapshot(value: SnapshotStagingEntity)
@@ -305,9 +335,15 @@ interface DiagnosticDao {
     entities = [
         LocalProfileEntity::class,
         ActiveProfileEntity::class,
+        LedgerEntity::class,
         AccountEntity::class,
         CategoryEntity::class,
         TransactionEntity::class,
+        RecurringTransactionEntity::class,
+        TagEntity::class,
+        TransactionTagEntity::class,
+        BudgetEntity::class,
+        TransactionAttachmentEntity::class,
         TransactionEvidenceEntity::class,
         OutboxEntity::class,
         SyncStateEntity::class,
@@ -317,11 +353,12 @@ interface DiagnosticDao {
         NotificationEventEntity::class,
         DiagnosticEventEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class FinanceDatabase : RoomDatabase() {
     abstract fun financeDao(): FinanceDao
+    abstract fun bookkeepingDao(): BookkeepingDao
     abstract fun syncDao(): SyncDao
     abstract fun profileDao(): ProfileDao
     abstract fun notificationDao(): NotificationDao
@@ -330,12 +367,139 @@ abstract class FinanceDatabase : RoomDatabase() {
     companion object {
         @Volatile private var instance: FinanceDatabase? = null
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE finance_accounts ADD COLUMN ledger_id TEXT")
+                db.execSQL("ALTER TABLE finance_accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE finance_accounts ADD COLUMN credit_limit_cents INTEGER")
+                db.execSQL("ALTER TABLE finance_accounts ADD COLUMN billing_day INTEGER")
+                db.execSQL("ALTER TABLE finance_accounts ADD COLUMN payment_due_day INTEGER")
+                db.execSQL("ALTER TABLE finance_accounts ADD COLUMN bank_name TEXT")
+                db.execSQL("ALTER TABLE finance_accounts ADD COLUMN note TEXT")
+                db.execSQL("ALTER TABLE finance_accounts ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0")
+
+                db.execSQL("ALTER TABLE finance_categories ADD COLUMN ledger_id TEXT")
+                db.execSQL("ALTER TABLE finance_categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE finance_categories ADD COLUMN level INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE finance_categories ADD COLUMN icon_type TEXT NOT NULL DEFAULT 'material'")
+                db.execSQL("ALTER TABLE finance_categories ADD COLUMN custom_icon_file_id TEXT")
+
+                db.execSQL("ALTER TABLE finance_transactions ADD COLUMN ledger_id TEXT")
+                db.execSQL("ALTER TABLE finance_transactions ADD COLUMN recurring_transaction_id TEXT")
+                db.execSQL("ALTER TABLE finance_transactions ADD COLUMN exclude_from_stats INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE finance_transactions ADD COLUMN exclude_from_budget INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE finance_transactions ADD COLUMN native_amount_cents INTEGER")
+                db.execSQL("ALTER TABLE finance_transactions ADD COLUMN native_currency TEXT")
+                db.execSQL("ALTER TABLE finance_transactions ADD COLUMN exchange_rate TEXT")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS finance_ledgers (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        local_profile_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        currency TEXT NOT NULL,
+                        ledger_type TEXT NOT NULL,
+                        month_start_day INTEGER NOT NULL,
+                        sort_order INTEGER NOT NULL,
+                        is_archived INTEGER NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        deleted_at TEXT,
+                        local_version INTEGER NOT NULL,
+                        server_version TEXT,
+                        modified_by_device TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT OR IGNORE INTO finance_ledgers
+                    (id, local_profile_id, name, currency, ledger_type, month_start_day, sort_order, is_archived, created_at, updated_at, deleted_at, local_version, server_version, modified_by_device)
+                    SELECT 'default-ledger-' || id, id, '默认账本', 'CNY', 'personal', 1, 0, 0, created_at, updated_at, NULL, 1, NULL, NULL
+                    FROM local_profiles
+                """.trimIndent())
+                db.execSQL("UPDATE finance_accounts SET ledger_id='default-ledger-' || local_profile_id WHERE ledger_id IS NULL")
+                db.execSQL("UPDATE finance_categories SET ledger_id='default-ledger-' || local_profile_id WHERE ledger_id IS NULL")
+                db.execSQL("UPDATE finance_transactions SET ledger_id='default-ledger-' || local_profile_id WHERE ledger_id IS NULL")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS finance_recurring_transactions (
+                        id TEXT NOT NULL PRIMARY KEY, local_profile_id TEXT NOT NULL, ledger_id TEXT NOT NULL,
+                        transaction_type TEXT NOT NULL, amount_cents INTEGER NOT NULL, currency TEXT NOT NULL,
+                        category_id TEXT, account_id TEXT, to_account_id TEXT, note TEXT, frequency TEXT NOT NULL,
+                        interval INTEGER NOT NULL, day_of_month INTEGER, day_of_week INTEGER, month_of_year INTEGER,
+                        start_date TEXT NOT NULL, end_date TEXT, last_generated_date TEXT, enabled INTEGER NOT NULL,
+                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, local_version INTEGER NOT NULL,
+                        server_version TEXT, modified_by_device TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS finance_tags (
+                        id TEXT NOT NULL PRIMARY KEY, local_profile_id TEXT NOT NULL, ledger_id TEXT NOT NULL,
+                        name TEXT NOT NULL, color TEXT, sort_order INTEGER NOT NULL, is_archived INTEGER NOT NULL,
+                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, local_version INTEGER NOT NULL,
+                        server_version TEXT, modified_by_device TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS finance_transaction_tags (
+                        id TEXT NOT NULL PRIMARY KEY, local_profile_id TEXT NOT NULL, transaction_id TEXT NOT NULL,
+                        tag_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT,
+                        local_version INTEGER NOT NULL, server_version TEXT, modified_by_device TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS finance_budgets (
+                        id TEXT NOT NULL PRIMARY KEY, local_profile_id TEXT NOT NULL, ledger_id TEXT NOT NULL,
+                        budget_type TEXT NOT NULL, category_id TEXT, amount_cents INTEGER NOT NULL, currency TEXT NOT NULL,
+                        period TEXT NOT NULL, start_day INTEGER NOT NULL, enabled INTEGER NOT NULL, created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL, deleted_at TEXT, local_version INTEGER NOT NULL, server_version TEXT,
+                        modified_by_device TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS finance_transaction_attachments (
+                        id TEXT NOT NULL PRIMARY KEY, local_profile_id TEXT NOT NULL, transaction_id TEXT NOT NULL,
+                        file_name TEXT NOT NULL, original_name TEXT, file_size INTEGER, width INTEGER, height INTEGER,
+                        sort_order INTEGER NOT NULL, file_id TEXT, sha256 TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                        deleted_at TEXT, local_version INTEGER NOT NULL, server_version TEXT, modified_by_device TEXT
+                    )
+                """.trimIndent())
+
+                val indexes = listOf(
+                    "CREATE INDEX IF NOT EXISTS index_finance_accounts_ledger_id ON finance_accounts(ledger_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_categories_ledger_id ON finance_categories(ledger_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_transactions_local_profile_id_ledger_id_local_date ON finance_transactions(local_profile_id, ledger_id, local_date)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_transactions_recurring_transaction_id ON finance_transactions(recurring_transaction_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_ledgers_local_profile_id ON finance_ledgers(local_profile_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_ledgers_local_profile_id_is_archived_sort_order ON finance_ledgers(local_profile_id, is_archived, sort_order)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_recurring_transactions_local_profile_id ON finance_recurring_transactions(local_profile_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_recurring_transactions_ledger_id ON finance_recurring_transactions(ledger_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_recurring_transactions_category_id ON finance_recurring_transactions(category_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_recurring_transactions_account_id ON finance_recurring_transactions(account_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_tags_local_profile_id ON finance_tags(local_profile_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_tags_ledger_id ON finance_tags(ledger_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_tags_ledger_id_name ON finance_tags(ledger_id, name)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_transaction_tags_local_profile_id ON finance_transaction_tags(local_profile_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_transaction_tags_transaction_id ON finance_transaction_tags(transaction_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_transaction_tags_tag_id ON finance_transaction_tags(tag_id)",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_finance_transaction_tags_transaction_id_tag_id ON finance_transaction_tags(transaction_id, tag_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_budgets_local_profile_id ON finance_budgets(local_profile_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_budgets_ledger_id ON finance_budgets(ledger_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_budgets_category_id ON finance_budgets(category_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_transaction_attachments_local_profile_id ON finance_transaction_attachments(local_profile_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_transaction_attachments_transaction_id ON finance_transaction_attachments(transaction_id)",
+                    "CREATE INDEX IF NOT EXISTS index_finance_transaction_attachments_file_id ON finance_transaction_attachments(file_id)",
+                )
+                indexes.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): FinanceDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 FinanceDatabase::class.java,
                 "lifetrace-finance.db",
-            ).fallbackToDestructiveMigrationOnDowngrade()
+            ).addMigrations(MIGRATION_1_2)
+                .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
                 .also { instance = it }
         }
