@@ -4,11 +4,12 @@ import android.os.SystemClock
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import com.lifetrace.finance.data.TransactionEntity
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
@@ -19,39 +20,46 @@ import java.time.Instant
 class LaunchTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
-    @Test fun appLaunchesIntoQuickEntry() {
-        rule.onNodeWithText("今天记一笔").assertIsDisplayed()
-        rule.onNodeWithTag("quick_amount").assertIsDisplayed()
+    @Test fun appLaunchesIntoBeeCountBills() {
+        rule.onNodeWithText("蜜蜂账本").assertIsDisplayed()
+        rule.onNodeWithTag("transaction_search").assertIsDisplayed()
+        rule.onNodeWithContentDescription("记一笔").assertIsDisplayed()
     }
 
-    @Test fun advancedBookkeepingEntriesAreAlwaysVisible() {
+    @Test fun advancedBookkeepingEntriesRemainReachable() {
+        rule.onNodeWithText("我的").performClick()
         rule.onNodeWithText("记账管理").assertIsDisplayed()
-        rule.onNodeWithText("账单导入").assertIsDisplayed()
-        rule.onNodeWithText("AI 设置").assertIsDisplayed()
-        rule.onNodeWithText("v0.2.0").assertIsDisplayed()
+        rule.onNodeWithText("智能记账").assertIsDisplayed()
+        rule.onNodeWithText("同步").assertIsDisplayed()
     }
 
     @Test fun quickExpenseCommitsWithinThreeSecondsOnceReady() {
+        rule.onNodeWithContentDescription("记一笔").performClick()
         rule.waitUntil(10_000) {
-            runCatching {
-                rule.onNodeWithTag("quick_save").assertIsEnabled()
-                true
-            }.getOrDefault(false)
+            rule.onAllNodesWithTag("entry_first_category").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("entry_first_category").performClick()
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithTag("quick_save").fetchSemanticsNodes().isNotEmpty()
         }
         val started = SystemClock.elapsedRealtime()
-        rule.onNodeWithTag("quick_amount").performTextInput("12.34")
-        rule.onNodeWithTag("quick_save").performClick()
+        rule.onNodeWithText("1").performClick()
+        rule.onNodeWithText("2").performClick()
+        rule.onNodeWithText(".").performClick()
+        rule.onNodeWithText("3").performClick()
+        rule.onNodeWithText("4").performClick()
+        rule.onNodeWithTag("quick_save").assertIsEnabled().performClick()
         rule.waitUntil(3_000) {
             rule.onAllNodesWithText("已保存，本地立即生效").fetchSemanticsNodes().isNotEmpty()
         }
         assertTrue("quick entry exceeded 3 seconds", SystemClock.elapsedRealtime() - started <= 3_000)
     }
 
-    @Test fun searchAndAccountTypeControlsAreReachable() {
-        rule.onNodeWithText("明细").performClick()
-        rule.onNodeWithTag("transaction_search").assertIsDisplayed()
-        rule.onNodeWithText("我的").performClick()
-        rule.onNodeWithText("账户类型：其他").assertIsDisplayed()
+    @Test fun reportsAndAccountsAreReachable() {
+        rule.onNodeWithText("图表").performClick()
+        rule.onNodeWithText("图表分析").assertIsDisplayed()
+        rule.onNodeWithText("账本").performClick()
+        rule.onNodeWithText("账户").assertIsDisplayed()
     }
 
     @Test fun syncedBillShowsImportedItemAndPaymentAccount() {
@@ -83,7 +91,6 @@ class LaunchTest {
             )
         }
 
-        rule.onNodeWithText("明细").performClick()
         rule.waitUntil(5_000) {
             rule.onAllNodesWithText("回归测试麦当劳").fetchSemanticsNodes().isNotEmpty() &&
                 rule.onAllNodesWithText("回归测试招商银行", substring = true).fetchSemanticsNodes().isNotEmpty()
