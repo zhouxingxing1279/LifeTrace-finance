@@ -7,7 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lifetrace.finance.sync.RecurringScheduler
 import com.lifetrace.finance.sync.SyncScheduler
-import com.lifetrace.finance.ui.BeeCountFinanceApp
+import com.lifetrace.finance.ui.BeeCountReplicaApp
 import com.lifetrace.finance.ui.FinanceViewModel
 import com.lifetrace.finance.ui.LifeTraceTheme
 
@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             LifeTraceTheme {
                 val vm: FinanceViewModel = viewModel()
-                BeeCountFinanceApp(
+                BeeCountReplicaApp(
                     vm,
                     initialDestination = initial,
                     sharedText = sharedText,
