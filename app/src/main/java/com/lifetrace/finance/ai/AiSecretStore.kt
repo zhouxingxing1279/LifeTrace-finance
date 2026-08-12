@@ -14,7 +14,9 @@ import javax.crypto.spec.GCMParameterSpec
 class AiSecretStore(context: Context) {
     private val prefs = context.getSharedPreferences("secure_ai", Context.MODE_PRIVATE)
     private val alias = "lifetrace_finance_vision_api_key"
-    private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    private val keyStore: KeyStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    }
 
     fun saveApiKey(value: String?) {
         val normalized = value?.trim().orEmpty()
