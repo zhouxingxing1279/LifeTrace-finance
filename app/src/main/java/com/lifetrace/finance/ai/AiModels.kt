@@ -44,6 +44,8 @@ data class BillInfo(
     val item: String? = null,
     val occurredAt: Instant? = null,
     val account: String? = null,
+    val fromAccount: String? = null,
+    val toAccount: String? = null,
     val category: String? = null,
     val externalTransactionId: String? = null,
     val confidence: Double? = null,
