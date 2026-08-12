@@ -1,8 +1,6 @@
 package com.lifetrace.finance.ai
 
 import android.util.Base64
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,7 +13,7 @@ class AiProviderException(message: String) : Exception(message)
 
 /**
  * BeeCount-style provider factory. LifeTrace deliberately executes it in Android rather than
- * proxying images through LifeTrace Cloud.
+ * proxying images through LifeTrace Cloud. Callers run this blocking HTTP request on Dispatchers.IO.
  */
 class AiProviderFactory(
     private val settings: AiSettingsStore,
@@ -28,15 +26,15 @@ class AiProviderFactory(
 ) {
     fun isVisionConfigured(): Boolean = settings.currentProvider().supportsVision && secrets.hasApiKey()
 
-    suspend fun vision(image: VisionImage, prompt: String): AiVisionResult = withContext(Dispatchers.IO) {
+    suspend fun vision(image: VisionImage, prompt: String): AiVisionResult {
         require(image.bytes.isNotEmpty()) { "图片为空" }
         require(image.mimeType in SUPPORTED_MIME) { "仅支持 PNG/JPEG/WebP" }
         require(image.bytes.size <= MAX_IMAGE_BYTES) { "图片超过 10 MiB 限制" }
 
         val provider = settings.currentProvider()
-        if (!provider.supportsVision) throw@withContext AiProviderException("当前 AI 服务商未配置视觉模型")
+        if (!provider.supportsVision) throw AiProviderException("当前 AI 服务商未配置视觉模型")
         val apiKey = secrets.loadApiKey()?.takeIf(String::isNotBlank)
-            ?: throw@withContext AiProviderException("请先配置 Vision API Key")
+            ?: throw AiProviderException("请先配置 Vision API Key")
 
         val base64 = Base64.encodeToString(image.bytes, Base64.NO_WRAP)
         val content = JSONArray()
@@ -55,16 +53,16 @@ class AiProviderFactory(
             .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        client.newCall(request).execute().use { response ->
+        return client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw@withContext AiProviderException("Vision API 请求失败（HTTP ${response.code}）")
+                throw AiProviderException("Vision API 请求失败（HTTP ${response.code}）")
             }
             val root = runCatching { JSONObject(responseBody) }
-                .getOrElse { throw@withContext AiProviderException("Vision API 返回了无效 JSON") }
+                .getOrElse { throw AiProviderException("Vision API 返回了无效 JSON") }
             val message = root.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
             val text = message?.optString("content")?.takeIf(String::isNotBlank)
-                ?: throw@withContext AiProviderException("Vision API 返回内容为空")
+                ?: throw AiProviderException("Vision API 返回内容为空")
             AiVisionResult(provider.id, provider.visionModel, text)
         }
     }
