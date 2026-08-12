@@ -56,14 +56,14 @@ class ScreenshotObserver(
         }.getOrNull()
     }
 
-    internal fun isScreenshot(name: String, path: String): Boolean {
-        val value = "$path/$name".lowercase()
-        return SCREENSHOT_KEYWORDS.any(value::contains)
-    }
-
     private data class Candidate(val uri: Uri, val name: String, val path: String, val createdAtMillis: Long)
 
     companion object {
         val SCREENSHOT_KEYWORDS = listOf("screenshot", "截屏", "截图", "screen_shot", "screen shot")
+
+        fun isScreenshot(name: String, path: String): Boolean {
+            val value = "$path/$name".lowercase()
+            return SCREENSHOT_KEYWORDS.any(value::contains)
+        }
     }
 }
