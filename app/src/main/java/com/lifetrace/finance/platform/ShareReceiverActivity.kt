@@ -30,10 +30,8 @@ class ShareReceiverActivity : Activity() {
                     val cached = cacheSharedFile(uri)
                     val graph = AppGraph.get(applicationContext)
                     if (!graph.aiProviderFactory.isVisionConfigured()) {
-                        startActivity(
-                            Intent(this, AiSettingsActivity::class.java)
-                                .putExtra(AiSettingsActivity.EXTRA_PENDING_IMAGE_PATH, cached.absolutePath),
-                        )
+                        graph.pendingShare.save(cached.absolutePath)
+                        startActivity(Intent(this, AiSettingsActivity::class.java))
                         finish()
                         return
                     }
