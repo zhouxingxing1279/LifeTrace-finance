@@ -30,7 +30,7 @@ class AiSettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val graph = AppGraph.get(applicationContext)
-        val pendingImagePath = intent.getStringExtra(EXTRA_PENDING_IMAGE_PATH)
+        val hasPendingImage = graph.pendingShare.peek() != null
 
         setContent {
             LifeTraceTheme {
@@ -58,6 +58,9 @@ class AiSettingsActivity : ComponentActivity() {
                 ) {
                     Text("智能截图记账", style = MaterialTheme.typography.headlineSmall)
                     Text("截图由 Android 直接发送给 Vision API；LifeTrace Cloud、桌面端和浏览器端不会接收原始图片。", style = MaterialTheme.typography.bodyMedium)
+                    if (hasPendingImage) {
+                        Text("已收到一张待识别截图，保存配置后会自动继续识别。", color = MaterialTheme.colorScheme.primary)
+                    }
 
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -106,6 +109,7 @@ class AiSettingsActivity : ComponentActivity() {
                                     if (graph.screenshotMonitor.hasMediaPermission()) graph.screenshotMonitor.start()
                                     else permissionLauncher.launch(graph.screenshotMonitor.requiredPermission())
                                 }
+                                val pendingImagePath = graph.pendingShare.consume()
                                 pendingImagePath?.let { path ->
                                     graph.autoBilling.submitImage(Uri.fromFile(File(path)), "share_receiver", deleteAfter = true)
                                 }
@@ -134,9 +138,5 @@ class AiSettingsActivity : ComponentActivity() {
                 }
             }
         }
-    }
-
-    companion object {
-        const val EXTRA_PENDING_IMAGE_PATH = "pending_image_path"
     }
 }
