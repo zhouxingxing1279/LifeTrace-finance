@@ -1,152 +1,109 @@
 # LifeTrace Finance Android — BeeCount-inspired bookkeeping domain
 
-Status: execution plan
+Status: **implemented and verified**
+
 Branch: `feature/beecount-domain-model`
 Cloud counterpart: `zhouxingxing1279/LifeTrace` branch `feature/beecount-domain-model`
 Reference: `TNT-Likely/BeeCount`
 
-## Non-negotiable backend rule
+## Backend rule
 
-The Android app synchronizes to the **existing LifeTrace Cloud** only. There is no new backend, database service, auth flow, sync API or BeeCount Cloud dependency.
+The Android app synchronizes to the **existing LifeTrace Cloud only**. No new backend, database service, authentication flow, sync API or BeeCount Cloud dependency was introduced.
 
-Flow remains:
+The path remains:
 
-`Room -> sync_outbox -> existing LifeTrace /api/v1/sync/push -> existing LifeTrace Cloud -> pull/snapshot -> Room`
+`Room -> sync_outbox -> existing LifeTrace /api/v1/sync/push -> LifeTrace Cloud -> pull/snapshot -> Room`
 
-## Scope
+## Implemented bookkeeping model
 
-Reproduce BeeCount's useful single-user bookkeeping core:
+New Room entities:
 
-- ledgers
-- richer accounts
-- two-level/hierarchical categories
-- expense/income/transfer/refund transactions
-- recurring transactions
-- tags + transaction-tag relation
-- budgets
-- attachment metadata
-- multi-currency transaction snapshots
-- exclude-from-stats / exclude-from-budget flags
-- hidden accounts
-- existing smart screenshot/notification/import evidence
+- `LedgerEntity` / `finance_ledgers`
+- `RecurringTransactionEntity` / `finance_recurring_transactions`
+- `TagEntity` / `finance_tags`
+- `TransactionTagEntity` / `finance_transaction_tags`
+- `BudgetEntity` / `finance_budgets`
+- `TransactionAttachmentEntity` / `finance_transaction_attachments`
 
-Not included in this pass: shared-ledger/member collaboration tables, BeeCount Cloud, BeeCount AI chat history, cloud exchange-rate cache.
+Existing entities were expanded with BeeCount-inspired fields.
 
-## Room v2 target
+Accounts now support ledger scope, ordering, credit limit, billing/payment-due days, bank name, note and hidden state. Categories support ledger scope, hierarchy level, ordering and icon metadata. Transactions support ledger scope, recurring-template linkage, independent `excludeFromStats` / `excludeFromBudget` flags and native-currency snapshots.
 
-### New entities
+The existing `finance_transaction_evidence` model remains separate from attachments: evidence records capture/import provenance; attachments represent files linked to a transaction.
 
-- `LedgerEntity` -> `finance_ledgers`
-- `RecurringTransactionEntity` -> `finance_recurring_transactions`
-- `TagEntity` -> `finance_tags`
-- `TransactionTagEntity` -> `finance_transaction_tags`
-- `BudgetEntity` -> `finance_budgets`
-- `TransactionAttachmentEntity` -> `finance_transaction_attachments`
+## Room v1 -> v2 migration
 
-### Existing entity extensions
+A non-destructive `MIGRATION_1_2` was implemented.
 
-`AccountEntity`:
-- `ledger_id`
-- `sort_order`
-- `credit_limit_cents`
-- `billing_day`
-- `payment_due_day`
-- `bank_name`
-- `note`
-- `is_hidden`
+- Existing accounts, categories, transactions and evidence are preserved.
+- Each local profile gets a deterministic default ledger ID: `default-ledger-<profileId>`.
+- Existing accounts/categories/transactions are backfilled to that ledger.
+- Existing stable string IDs are preserved.
+- New indexes cover ledger scope, recurrence, category/budget lookups and transaction-tag uniqueness.
+- A migration-created default ledger is automatically placed into the existing LifeTrace `sync_outbox` exactly once when the repository first uses it.
 
-`CategoryEntity`:
-- `ledger_id`
-- `sort_order`
-- `level`
-- `icon_type`
-- `custom_icon_file_id`
+## Existing LifeTrace sync integration
 
-`TransactionEntity`:
-- `ledger_id`
-- `recurring_transaction_id`
-- `exclude_from_stats`
-- `exclude_from_budget`
-- `native_amount_cents`
-- `native_currency`
-- `exchange_rate`
+`LifeTraceContract.FINANCE_ENTITY_TYPES`, `SyncEngine`, server-version handling, remote deletion and `RemoteMapper` now cover all ten finance entity types:
 
-All new synced entities carry the same local/cloud metadata pattern already used by current entities: `id`, `local_profile_id`, timestamps, delete marker, local version, server version; where relevant `modified_by_device` is retained.
+- `finance.ledger`
+- `finance.account`
+- `finance.category`
+- `finance.transaction`
+- `finance.recurring_transaction`
+- `finance.tag`
+- `finance.transaction_tag`
+- `finance.budget`
+- `finance.transaction_attachment`
+- `finance.transaction_evidence`
 
-## Migration v1 -> v2
+No second sync state machine was added. New/updated entities continue to use `sync_outbox`, existing conflict handling, pull/snapshot and tombstones.
 
-- Preserve all current rows.
-- Insert one deterministic/default personal ledger per local profile when a profile has financial data but no ledger.
-- Backfill existing accounts/categories/transactions to that profile's default ledger.
-- Preserve stable current string IDs; do not convert to auto-increment IDs.
-- Add indexes for ledger scope, hierarchy, recurrence, budget/category lookup and transaction-tag uniqueness.
-- Keep the existing v1 schema export and generate v2 schema export through Room/KSP in CI/build.
+Old LifeTrace Cloud v1 account/category/transaction payloads without `ledgerId` remain compatible: the Android mapper preserves an existing local ledger or falls back to the deterministic default ledger.
 
-## Sync mapping
+## Implemented repository behavior
 
-| Room | LifeTrace entity type |
-| --- | --- |
-| `finance_ledgers` | `finance.ledger` |
-| `finance_accounts` | `finance.account` |
-| `finance_categories` | `finance.category` |
-| `finance_transactions` | `finance.transaction` |
-| `finance_recurring_transactions` | `finance.recurring_transaction` |
-| `finance_tags` | `finance.tag` |
-| `finance_transaction_tags` | `finance.transaction_tag` |
-| `finance_budgets` | `finance.budget` |
-| `finance_transaction_attachments` | `finance.transaction_attachment` |
-| `finance_transaction_evidence` | `finance.transaction_evidence` |
-
-`LifeTraceContract.FINANCE_ENTITY_TYPES`, `SyncEngine.setServerVersion`, remote deletion and `RemoteMapper` will be extended to cover every row above. Pull/snapshot remain the existing LifeTrace APIs.
+- create/select default ledger;
+- create accounts and hierarchical categories in a ledger;
+- expense/income/transfer/refund/fee transaction model;
+- recurring transaction templates;
+- normalized tags and transaction-tag relations;
+- total/category budgets;
+- hidden accounts;
+- independent statistics and budget exclusions;
+- existing notification candidate/evidence flow retained;
+- new entities generate ordinary LifeTrace outbox changes and relationship dependencies.
 
 ## Money semantics
 
-LifeTrace keeps integer cents. BeeCount's `double` money fields are not copied literally.
+LifeTrace keeps integer money rather than copying BeeCount `double` amounts:
 
-- `amount_cents`: transaction amount in transaction/account currency
-- `currency`: transaction currency
-- `native_amount_cents`: frozen converted amount in ledger base currency
-- `native_currency`: ledger base currency used for the snapshot
-- `exchange_rate`: decimal string snapshot when conversion occurred
+- `amount_cents`: transaction/account currency;
+- `currency`: transaction currency;
+- `native_amount_cents`: frozen amount converted to ledger base currency;
+- `native_currency`: ledger base currency snapshot;
+- `exchange_rate`: decimal string snapshot.
 
-This avoids floating-point money on the wire and preserves the existing LifeTrace contract invariant.
+## Verification result
 
-## Feature semantics
+Final code head before this documentation-only update: `041b9a81f58295c0d1180c2c6fae1becabf6501e`.
 
-- Transfer: one transaction with `transactionType=transfer`, `accountId` and `toAccountId`.
-- Category hierarchy: `parentId` + `level`; no device-local parent integer IDs.
-- Tags: normalized many-to-many relation; not embedded as mutable JSON on a transaction.
-- Budgets: total/category budgets; monthly/weekly/yearly period and start day.
-- `excludeFromStats`: excluded from income/expense statistics only.
-- `excludeFromBudget`: excluded from budget consumption independently.
-- Hidden account: excluded from ordinary picker/list but still available for balance/net-worth calculations and historical records.
-- Evidence remains separate from attachments: evidence describes capture/import provenance; attachment describes a file linked to a transaction.
+**EPIC07 Android CI #63 — success.** The run passed:
 
-## Execution order
+- Core/JVM tests;
+- Android lint;
+- Debug build;
+- Release/R8 build;
+- emulator/instrumentation tests;
+- Room v1->v2 migration test;
+- migrated-default-ledger outbox bootstrap test.
 
-1. Cloud contract branch first: add/validate the entity types while preserving existing sync protocol.
-2. Room v2 entities + migration + DAO.
-3. Repository CRUD and outbox generation.
-4. Sync mapper/version/delete handling.
-5. Domain statistics/budget/tag/recurrence behavior.
-6. Minimal UI wiring needed to make the features usable.
-7. Unit tests + migration/contract tests + Android CI.
-8. Update completion report; merge only after both repo branches pass tests.
+The migration test creates a v1-style database, inserts existing profile/account/category/transaction data, executes `MIGRATION_1_2`, and verifies row preservation, deterministic ledger backfill and new-table defaults. The bootstrap test verifies the migrated ledger is enqueued for existing LifeTrace Cloud synchronization exactly once.
 
-## Tests required
+## Scope intentionally deferred
 
-- Room v1->v2 migration preserves existing accounts/categories/transactions/evidence.
-- default ledger backfill is deterministic per local profile.
-- nested category round-trip.
-- transfer round-trip with both accounts.
-- tags have unique transaction/tag relation and round-trip.
-- budget consumption honors `excludeFromBudget`.
-- statistics honor `excludeFromStats`.
-- recurring rule serialization/round-trip.
-- attachment metadata round-trip without creating a new storage backend.
-- all new entity types are included in pull and snapshot filters.
-- conflicts/deletes/serverVersion updates work for every new entity.
+Shared/family ledger collaboration, BeeCount Cloud, BeeCount authentication, BeeCount AI chat persistence and a cloud exchange-rate service are not part of this implementation.
 
-## Merge gate
+## Merge gate result
 
-No merge to `main` until Android CI and LifeTrace Cloud/contracts CI are green. If either side is not deployable/compatible, keep both changes on the feature branches.
+The paired Android and LifeTrace Cloud code heads have passed their relevant CI suites. Merge order should be **LifeTrace Cloud first, Android second**, so the server recognizes the new entity types before an Android client can emit them.
