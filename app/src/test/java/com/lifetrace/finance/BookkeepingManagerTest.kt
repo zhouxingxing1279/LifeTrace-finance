@@ -12,6 +12,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -84,5 +88,91 @@ class BookkeepingManagerTest {
 
         assertEquals(LocalDate.of(2026, 7, 15), from)
         assertEquals(LocalDate.of(2026, 8, 14), to)
+    }
+
+    @Test
+    fun categoryCanMoveUnderParentAndKeepsSyncHistory() = runBlocking {
+        val profile = repo.ensureProfile()
+        val ledger = repo.ensureDefaultLedger(profile.id)
+        val parentId = manager.createCategory(profile.id, ledger.id, "生活", TransactionType.EXPENSE)
+        val childId = manager.createCategory(profile.id, ledger.id, "咖啡", TransactionType.EXPENSE)
+
+        manager.updateCategory(childId, "咖啡茶饮", parentId)
+
+        val updated = requireNotNull(db.financeDao().categoryById(childId))
+        assertEquals("咖啡茶饮", updated.name)
+        assertEquals(parentId, updated.parentId)
+        assertEquals(2, updated.level)
+        assertTrue(db.syncDao().pendingForEntity("finance.category", childId) >= 1)
+    }
+
+    @Test
+    fun categoryIconAndSiblingOrderArePersisted() = runBlocking {
+        val profile = repo.ensureProfile()
+        val ledger = repo.ensureDefaultLedger(profile.id)
+        val parentId = manager.createCategory(profile.id, ledger.id, "饮食测试", TransactionType.EXPENSE)
+        val breakfastId = manager.createCategory(profile.id, ledger.id, "早餐测试", TransactionType.EXPENSE, parentId, "restaurant")
+        val dinnerId = manager.createCategory(profile.id, ledger.id, "晚餐测试", TransactionType.EXPENSE, parentId, "restaurant")
+
+        manager.moveCategory(breakfastId, 1)
+
+        val siblings = db.financeDao().categoryList(profile.id).filter { it.parentId == parentId }
+        assertEquals(listOf(dinnerId, breakfastId), siblings.map { it.id })
+        assertEquals("restaurant", db.financeDao().categoryById(breakfastId)?.icon)
+        assertTrue(db.syncDao().pendingForEntity("finance.category", breakfastId) >= 1)
+        assertTrue(db.syncDao().pendingForEntity("finance.category", dinnerId) >= 1)
+    }
+
+    @Test
+    fun rejectsNonCnyLedgerAndAccount() = runBlocking {
+        val profile = repo.ensureProfile()
+        val ledger = repo.ensureDefaultLedger(profile.id)
+        assertThrows(IllegalArgumentException::class.java) { runBlocking { manager.createLedger(profile.id, "美元账本", "USD") } }
+        assertThrows(IllegalArgumentException::class.java) { runBlocking { manager.createAccount(profile.id, ledger.id, "美元账户", "cash", "USD") } }
+        Unit
+    }
+
+    @Test
+    fun budgetCanBeEditedAndSoftDeleted() = runBlocking {
+        val profile = repo.ensureProfile()
+        val ledger = repo.ensureDefaultLedger(profile.id)
+        val category = repo.categories(profile.id).first().first { it.categoryType == "expense" }
+        val id = manager.createBudget(profile.id, ledger.id, 10_000, null, "monthly", 1)
+
+        manager.updateBudget(id, 20_000, category.id, "weekly", 7)
+        val edited = requireNotNull(db.bookkeepingDao().budgetById(id))
+        assertEquals(20_000, edited.amountCents)
+        assertEquals(category.id, edited.categoryId)
+        assertEquals("category", edited.budgetType)
+        assertEquals("weekly", edited.period)
+
+        manager.archiveBudget(id)
+        assertNotNull(db.bookkeepingDao().budgetById(id)?.deletedAt)
+        assertFalse(manager.budgets(profile.id, ledger.id).first().any { it.id == id })
+        assertTrue(db.syncDao().pendingForEntity("finance.budget", id) >= 1)
+    }
+
+    @Test
+    fun recurringRuleCanBeEditedAndDeletedWithoutDeletingGeneratedTransactions() = runBlocking {
+        val profile = repo.ensureProfile()
+        val ledger = repo.ensureDefaultLedger(profile.id)
+        val account = repo.accounts(profile.id).first().first()
+        val date = LocalDate.of(2026, 8, 12)
+        val id = manager.createRecurring(profile.id, ledger.id, TransactionType.EXPENSE, 1000, account.id,
+            frequency = "daily", startDate = date)
+        assertEquals(1, manager.executeDueRecurring(profile.id, date))
+
+        manager.updateRecurring(id, TransactionType.EXPENSE, 2500, account.id, null, null, "会员续费",
+            "monthly", 1, date, 12, null, null, null)
+        val edited = requireNotNull(db.bookkeepingDao().recurringById(id))
+        assertEquals(2500, edited.amountCents)
+        assertEquals("monthly", edited.frequency)
+        assertEquals("会员续费", edited.note)
+
+        manager.archiveRecurring(id)
+        assertNotNull(db.bookkeepingDao().recurringById(id)?.deletedAt)
+        assertFalse(manager.recurring(profile.id, ledger.id).first().any { it.id == id })
+        assertEquals(1, repo.transactions(profile.id).first().count { it.recurringTransactionId == id })
+        assertTrue(db.syncDao().pendingForEntity("finance.recurring_transaction", id) >= 1)
     }
 }

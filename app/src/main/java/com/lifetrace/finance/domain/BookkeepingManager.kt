@@ -40,6 +40,8 @@ class BookkeepingManager(
     fun budgets(profileId: String, ledgerId: String): Flow<List<BudgetEntity>> = bookkeeping.budgets(profileId, ledgerId)
     fun recurring(profileId: String, ledgerId: String): Flow<List<RecurringTransactionEntity>> = bookkeeping.recurringTransactions(profileId, ledgerId)
     fun tagsForTransaction(transactionId: String): Flow<List<TagEntity>> = bookkeeping.tagsForTransaction(transactionId)
+    fun transactionTags(profileId: String): Flow<List<TransactionTagEntity>> = repository.transactionTags(profileId)
+    fun attachmentsForTransaction(transactionId: String): Flow<List<TransactionAttachmentEntity>> = repository.attachmentsForTransaction(transactionId)
 
     suspend fun createLedger(profileId: String, name: String, currency: String = "CNY", monthStartDay: Int = 1): String =
         repository.createLedger(profileId, name, currency, monthStartDay)
@@ -72,7 +74,7 @@ class BookkeepingManager(
     ): String {
         require(name.isNotBlank())
         require(bookkeeping.ledgerById(ledgerId)?.localProfileId == profileId) { "账本不存在" }
-        require(currency.matches(Regex("[A-Z]{3}")))
+        require(currency == "CNY") { "仅支持人民币账户" }
         require(last4 == null || last4.matches(Regex("\\d{4}"))) { "卡号尾四位必须是 4 位数字" }
         require(billingDay == null || billingDay in 1..31)
         require(paymentDueDay == null || paymentDueDay in 1..31)
@@ -113,7 +115,7 @@ class BookkeepingManager(
         hidden: Boolean,
     ) {
         require(name.isNotBlank())
-        require(currency.matches(Regex("[A-Z]{3}")))
+        require(currency == "CNY") { "仅支持人民币账户" }
         require(last4 == null || last4.matches(Regex("\\d{4}")))
         require(billingDay == null || billingDay in 1..31)
         require(paymentDueDay == null || paymentDueDay in 1..31)
@@ -136,12 +138,24 @@ class BookkeepingManager(
         db.withTransaction { finance.upsertAccount(updated); sync.enqueue(outboxFor(updated)) }
     }
 
+    suspend fun correctAccountBalance(id: String, desiredBalanceCents: Long, rows: List<TransactionEntity>) {
+        val current = finance.accountById(id) ?: error("账户不存在")
+        val updated = current.copy(
+            openingBalanceCents = AccountBalance.openingForDesiredBalance(desiredBalanceCents, id, rows),
+            balanceAt = Instant.now().toString(),
+            updatedAt = Instant.now().toString(),
+            localVersion = current.localVersion + 1,
+        )
+        db.withTransaction { finance.upsertAccount(updated); sync.enqueue(outboxFor(updated)) }
+    }
+
     suspend fun createCategory(
         profileId: String,
         ledgerId: String,
         name: String,
         type: TransactionType,
         parentId: String? = null,
+        icon: String? = null,
     ): String {
         require(name.isNotBlank())
         val parent = parentId?.let { finance.categoryById(it) }
@@ -156,6 +170,7 @@ class BookkeepingManager(
             categoryType = type.wire,
             parentId = parentId,
             level = if (parent == null) 1 else 2,
+            icon = icon,
             createdAt = now,
             updatedAt = now,
         )
@@ -164,6 +179,43 @@ class BookkeepingManager(
     }
 
     suspend fun archiveCategory(id: String) = repository.archiveCategory(id)
+
+    suspend fun updateCategory(id: String, name: String, parentId: String?, icon: String? = null) {
+        require(name.isNotBlank())
+        val current = finance.categoryById(id) ?: error("分类不存在")
+        val parent = parentId?.let { finance.categoryById(it) }
+        require(parent == null || (parent.id != id && parent.ledgerId == current.ledgerId && parent.categoryType == current.categoryType && parent.level == 1)) {
+            "父分类无效"
+        }
+        val updated = current.copy(
+            name = name.trim(),
+            parentId = parentId,
+            level = if (parentId == null) 1 else 2,
+            icon = icon ?: current.icon,
+            updatedAt = Instant.now().toString(),
+            localVersion = current.localVersion + 1,
+        )
+        db.withTransaction { finance.upsertCategory(updated); sync.enqueue(outboxFor(updated)) }
+    }
+
+    suspend fun moveCategory(id: String, direction: Int) {
+        require(direction == -1 || direction == 1)
+        val current = finance.categoryById(id) ?: return
+        val siblings = finance.categoryList(current.localProfileId)
+            .filter { it.ledgerId == current.ledgerId && it.categoryType == current.categoryType && it.parentId == current.parentId }
+            .sortedWith(compareBy<CategoryEntity> { it.sortOrder }.thenBy { it.name })
+        val index = siblings.indexOfFirst { it.id == id }
+        val targetIndex = index + direction
+        if (index < 0 || targetIndex !in siblings.indices) return
+        val target = siblings[targetIndex]
+        val now = Instant.now().toString()
+        val moved = current.copy(sortOrder = target.sortOrder.takeIf { it != current.sortOrder } ?: targetIndex, updatedAt = now, localVersion = current.localVersion + 1)
+        val swapped = target.copy(sortOrder = current.sortOrder.takeIf { it != target.sortOrder } ?: index, updatedAt = now, localVersion = target.localVersion + 1)
+        db.withTransaction {
+            finance.upsertCategory(moved); finance.upsertCategory(swapped)
+            sync.enqueue(outboxFor(moved)); sync.enqueue(outboxFor(swapped))
+        }
+    }
 
     suspend fun createTag(profileId: String, ledgerId: String, name: String, color: String? = null): String =
         repository.createTag(profileId, ledgerId, name, color)
@@ -217,6 +269,37 @@ class BookkeepingManager(
         db.withTransaction { bookkeeping.upsertBudget(updated); sync.enqueue(outboxFor(updated)) }
     }
 
+    suspend fun updateTag(id: String, name: String, color: String?) = repository.updateTag(id, name, color)
+
+    suspend fun createAttachment(profileId: String, transactionId: String, fileName: String, originalName: String?, fileSize: Long?, width: Int?, height: Int?, sha256: String?) =
+        repository.createAttachment(profileId, transactionId, fileName, originalName, fileSize, width, height, sha256)
+
+    suspend fun deleteAttachment(id: String): TransactionAttachmentEntity? = repository.deleteAttachment(id)
+
+    suspend fun updateBudget(id: String, amountCents: Long, categoryId: String?, period: String, startDay: Int) {
+        require(amountCents > 0)
+        require(period in setOf("weekly", "monthly", "yearly"))
+        val current = bookkeeping.budgetById(id) ?: error("预算不存在")
+        val updated = current.copy(
+            budgetType = if (categoryId == null) "total" else "category",
+            categoryId = categoryId,
+            amountCents = amountCents,
+            period = period,
+            startDay = startDay.coerceIn(1, 28),
+            updatedAt = Instant.now().toString(),
+            localVersion = current.localVersion + 1,
+            modifiedByDevice = deviceId,
+        )
+        db.withTransaction { bookkeeping.upsertBudget(updated); sync.enqueue(outboxFor(updated)) }
+    }
+
+    suspend fun archiveBudget(id: String) {
+        val current = bookkeeping.budgetById(id) ?: return
+        val now = Instant.now().toString()
+        val deleted = current.copy(deletedAt = now, updatedAt = now, localVersion = current.localVersion + 1, modifiedByDevice = deviceId)
+        db.withTransaction { bookkeeping.upsertBudget(deleted); sync.enqueue(deleteOutbox("finance.budget", id, current.serverVersion ?: "0", now)) }
+    }
+
     fun budgetPeriod(budget: BudgetEntity, today: LocalDate = LocalDate.now()): Pair<LocalDate, LocalDate> = when (budget.period) {
         "weekly" -> {
             val start = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
@@ -261,6 +344,54 @@ class BookkeepingManager(
             modifiedByDevice = deviceId,
         )
         db.withTransaction { bookkeeping.upsertRecurring(updated); sync.enqueue(outboxFor(updated)) }
+    }
+
+    suspend fun updateRecurring(
+        id: String,
+        type: TransactionType,
+        amountCents: Long,
+        accountId: String?,
+        toAccountId: String?,
+        categoryId: String?,
+        note: String?,
+        frequency: String,
+        interval: Int,
+        startDate: LocalDate,
+        dayOfMonth: Int?,
+        dayOfWeek: Int?,
+        monthOfYear: Int?,
+        endDate: LocalDate?,
+    ) {
+        require(amountCents > 0)
+        require(frequency in setOf("daily", "weekly", "monthly", "yearly"))
+        val current = bookkeeping.recurringById(id) ?: error("周期规则不存在")
+        val updated = current.copy(
+            transactionType = type.wire,
+            amountCents = amountCents,
+            accountId = accountId,
+            toAccountId = toAccountId,
+            categoryId = categoryId,
+            note = note?.trim()?.takeIf(String::isNotBlank),
+            frequency = frequency,
+            interval = interval.coerceAtLeast(1),
+            startDate = startDate.toString(),
+            dayOfMonth = dayOfMonth,
+            dayOfWeek = dayOfWeek,
+            monthOfYear = monthOfYear,
+            endDate = endDate?.toString(),
+            lastGeneratedDate = null,
+            updatedAt = Instant.now().toString(),
+            localVersion = current.localVersion + 1,
+            modifiedByDevice = deviceId,
+        )
+        db.withTransaction { bookkeeping.upsertRecurring(updated); sync.enqueue(outboxFor(updated)) }
+    }
+
+    suspend fun archiveRecurring(id: String) {
+        val current = bookkeeping.recurringById(id) ?: return
+        val now = Instant.now().toString()
+        val deleted = current.copy(deletedAt = now, updatedAt = now, localVersion = current.localVersion + 1, modifiedByDevice = deviceId)
+        db.withTransaction { bookkeeping.upsertRecurring(deleted); sync.enqueue(deleteOutbox("finance.recurring_transaction", id, current.serverVersion ?: "0", now)) }
     }
 
     suspend fun executeDueRecurring(profileId: String, through: LocalDate = LocalDate.now()): Int {

@@ -16,7 +16,7 @@ class ShareReceiverActivity : Activity() {
     @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (intent?.action != Intent.ACTION_SEND) {
+        if (intent?.action != Intent.ACTION_SEND && intent?.action != Intent.ACTION_SEND_MULTIPLE) {
             finish()
             return
         }
@@ -26,18 +26,18 @@ class ShareReceiverActivity : Activity() {
         var sharedText: String? = null
 
         when {
-            type.startsWith("image/") -> {
-                val uri = intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
-                if (uri != null) {
-                    val cached = cacheSharedFile(uri)
+            type.startsWith("image/") || intent.action == Intent.ACTION_SEND_MULTIPLE -> {
+                val uris = sharedImageUris(intent)
+                if (uris.isNotEmpty()) {
+                    val cached = uris.map(::cacheSharedFile)
                     val graph = AppGraph.get(applicationContext)
                     if (!graph.aiProviderFactory.isVisionConfigured()) {
-                        graph.pendingShare.save(cached.absolutePath)
+                        graph.pendingShare.saveAll(cached.map { it.absolutePath })
                         startActivity(Intent(this, AiSettingsActivity::class.java))
                         finish()
                         return
                     }
-                    graph.autoBilling.submitImage(Uri.fromFile(cached), source = "share_receiver", deleteAfter = true)
+                    graph.autoBilling.submitImages(cached.map(Uri::fromFile), source = "share_receiver", deleteAfter = true)
                     destination = "inbox"
                 }
             }
@@ -78,6 +78,16 @@ class ShareReceiverActivity : Activity() {
         )
         finish()
     }
+
+    @Suppress("DEPRECATION")
+    private fun sharedImageUris(intent: Intent): List<Uri> = buildList {
+        when (intent.action) {
+            Intent.ACTION_SEND_MULTIPLE -> addAll(intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty())
+            else -> (intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri)?.let(::add)
+        }
+        val clip = intent.clipData
+        if (clip != null) for (index in 0 until clip.itemCount) clip.getItemAt(index).uri?.let(::add)
+    }.distinctBy(Uri::toString)
 
     private fun isBillFileMime(type: String): Boolean = type in setOf(
         "application/vnd.ms-excel",

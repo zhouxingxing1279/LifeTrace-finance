@@ -87,6 +87,8 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
     fun ledgers(profileId: String): Flow<List<LedgerEntity>> = bookkeeping.ledgers(profileId)
     fun tags(profileId: String, ledgerId: String): Flow<List<TagEntity>> = bookkeeping.tags(profileId, ledgerId)
     fun tagsForTransaction(transactionId: String): Flow<List<TagEntity>> = bookkeeping.tagsForTransaction(transactionId)
+    fun transactionTags(profileId: String): Flow<List<TransactionTagEntity>> = bookkeeping.transactionTags(profileId)
+    fun attachmentsForTransaction(transactionId: String): Flow<List<TransactionAttachmentEntity>> = bookkeeping.attachmentsForTransaction(transactionId)
     fun budgets(profileId: String, ledgerId: String): Flow<List<BudgetEntity>> = bookkeeping.budgets(profileId, ledgerId)
     fun recurringTransactions(profileId: String, ledgerId: String): Flow<List<RecurringTransactionEntity>> = bookkeeping.recurringTransactions(profileId, ledgerId)
     fun expenseTotal(profileId: String, from: LocalDate, to: LocalDate) = finance.expenseTotal(profileId, from.toString(), to.toString())
@@ -115,7 +117,7 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
 
     suspend fun createLedger(profileId: String, name: String, currency: String = "CNY", monthStartDay: Int = 1): String {
         require(name.isNotBlank())
-        require(currency.matches(Regex("[A-Z]{3}")))
+        require(currency == "CNY") { "仅支持人民币账本" }
         require(monthStartDay in 1..28)
         val now = Instant.now().toString()
         val entity = LedgerEntity(
@@ -157,8 +159,37 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         }
         val account = accountId?.let { finance.accountById(it) }
         val ledger = ledgerId ?: account?.ledgerId ?: ensureDefaultLedger(profileId).id
+        val normalizedExternalId = externalTransactionId?.trim()?.takeIf { it.isNotEmpty() }
+        if (sourceType.isBillImport()) {
+            normalizedExternalId?.let { externalId ->
+                finance.transactionByExternalId(profileId, externalId)?.let { return it.id }
+            }
+            val matchingManual = finance.matchingManualTransactions(
+                profileId = profileId,
+                transactionType = type.wire,
+                amountCents = amountCents,
+                fromOccurredAt = occurredAt.minusSeconds(IMPORT_MATCH_WINDOW_SECONDS).toString(),
+                toOccurredAt = occurredAt.plusSeconds(IMPORT_MATCH_WINDOW_SECONDS).toString(),
+            ).filter { existing ->
+                accountId == null || existing.accountId == null || existing.accountId == accountId
+            }
+            if (matchingManual.size == 1) {
+                return mergeImportIntoManual(
+                    manual = matchingManual.single(),
+                    importedMerchant = merchant,
+                    externalTransactionId = normalizedExternalId,
+                    importSourceType = sourceType,
+                    occurredAt = occurredAt,
+                )
+            }
+        }
         val id = UUID.randomUUID().toString()
         val now = Instant.now().toString()
+        val effectiveStatus = if (sourceType.isBillImport() && categoryId == null && status == TransactionStatus.CONFIRMED) {
+            TransactionStatus.CANDIDATE
+        } else {
+            status
+        }
         val entity = TransactionEntity(
             id = id,
             localProfileId = profileId,
@@ -173,9 +204,9 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
             note = note,
             occurredAt = occurredAt.toString(),
             localDate = occurredAt.atZone(ZoneId.systemDefault()).toLocalDate().toString(),
-            status = status.wire,
+            status = effectiveStatus.wire,
             sourceType = sourceType,
-            externalTransactionId = externalTransactionId,
+            externalTransactionId = normalizedExternalId,
             excludeFromStats = excludeFromStats,
             excludeFromBudget = excludeFromBudget,
             createdAt = now,
@@ -184,6 +215,42 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         )
         db.withTransaction { finance.upsertTransaction(entity); sync.enqueue(outboxFor(entity)) }
         return id
+    }
+
+    private suspend fun mergeImportIntoManual(
+        manual: TransactionEntity,
+        importedMerchant: String?,
+        externalTransactionId: String?,
+        importSourceType: String,
+        occurredAt: Instant,
+    ): String {
+        val now = Instant.now().toString()
+        val merged = manual.copy(
+            merchant = manual.merchant ?: importedMerchant,
+            occurredAt = occurredAt.toString(),
+            localDate = occurredAt.atZone(ZoneId.systemDefault()).toLocalDate().toString(),
+            externalTransactionId = externalTransactionId ?: manual.externalTransactionId,
+            updatedAt = now,
+            localVersion = manual.localVersion + 1,
+            modifiedByDevice = deviceId,
+        )
+        val evidence = TransactionEvidenceEntity(
+            id = UUID.randomUUID().toString(),
+            localProfileId = manual.localProfileId,
+            transactionId = manual.id,
+            sourceType = importSourceType,
+            externalTransactionId = externalTransactionId,
+            confidence = 1.0,
+            createdAt = now,
+            updatedAt = now,
+        )
+        db.withTransaction {
+            finance.upsertTransaction(merged)
+            finance.upsertEvidence(evidence)
+            sync.enqueue(outboxFor(merged))
+            sync.enqueue(outboxFor(evidence))
+        }
+        return manual.id
     }
 
     /** Persist one notification candidate exactly once. Raw notification text is never stored. */
@@ -267,6 +334,40 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         db.withTransaction { finance.upsertTransaction(updated); sync.enqueue(outboxFor(updated)) }
     }
 
+    suspend fun updateTransactionDetails(
+        id: String,
+        type: TransactionType,
+        amountCents: Long,
+        accountId: String?,
+        toAccountId: String?,
+        categoryId: String?,
+        merchant: String?,
+        note: String?,
+        localDate: LocalDate,
+    ) {
+        require(amountCents > 0)
+        require(type != TransactionType.TRANSFER || (accountId != null && toAccountId != null && accountId != toAccountId))
+        val current = finance.transactionById(id) ?: return
+        val zone = ZoneId.systemDefault()
+        val localTime = runCatching { Instant.parse(current.occurredAt).atZone(zone).toLocalTime() }.getOrDefault(java.time.LocalTime.NOON)
+        val occurredAt = localDate.atTime(localTime).atZone(zone).toInstant().toString()
+        val updated = current.copy(
+            transactionType = type.wire,
+            amountCents = amountCents,
+            accountId = accountId,
+            toAccountId = if (type == TransactionType.TRANSFER) toAccountId else null,
+            categoryId = if (type == TransactionType.TRANSFER) null else categoryId,
+            merchant = merchant,
+            note = note,
+            occurredAt = occurredAt,
+            localDate = localDate.toString(),
+            updatedAt = Instant.now().toString(),
+            localVersion = current.localVersion + 1,
+            modifiedByDevice = deviceId,
+        )
+        db.withTransaction { finance.upsertTransaction(updated); sync.enqueue(outboxFor(updated)) }
+    }
+
     suspend fun setTransactionFlags(id: String, excludeFromStats: Boolean, excludeFromBudget: Boolean) {
         val current = finance.transactionById(id) ?: return
         val updated = current.copy(
@@ -327,6 +428,16 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         return entity.id
     }
 
+    suspend fun updateTag(id: String, name: String, color: String?) {
+        require(name.isNotBlank())
+        val current = bookkeeping.tagById(id) ?: error("tag not found")
+        val updated = current.copy(
+            name = name.trim(), color = color, updatedAt = Instant.now().toString(),
+            localVersion = current.localVersion + 1, modifiedByDevice = deviceId,
+        )
+        db.withTransaction { bookkeeping.upsertTag(updated); sync.enqueue(outboxFor(updated)) }
+    }
+
     suspend fun addTagToTransaction(profileId: String, transactionId: String, tagId: String): String {
         bookkeeping.transactionTag(transactionId, tagId)?.let { return it.id }
         require(finance.transactionById(transactionId) != null) { "transaction not found" }
@@ -338,6 +449,35 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         )
         db.withTransaction { bookkeeping.upsertTransactionTag(entity); sync.enqueue(outboxFor(entity)) }
         return entity.id
+    }
+
+    suspend fun createAttachment(
+        profileId: String,
+        transactionId: String,
+        fileName: String,
+        originalName: String?,
+        fileSize: Long?,
+        width: Int? = null,
+        height: Int? = null,
+        sha256: String? = null,
+    ): String {
+        require(finance.transactionById(transactionId) != null) { "transaction not found" }
+        val now = Instant.now().toString()
+        val entity = TransactionAttachmentEntity(
+            id = UUID.randomUUID().toString(), localProfileId = profileId, transactionId = transactionId,
+            fileName = fileName, originalName = originalName, fileSize = fileSize, width = width, height = height,
+            sha256 = sha256, createdAt = now, updatedAt = now, modifiedByDevice = deviceId,
+        )
+        db.withTransaction { bookkeeping.upsertAttachment(entity); sync.enqueue(outboxFor(entity)) }
+        return entity.id
+    }
+
+    suspend fun deleteAttachment(id: String): TransactionAttachmentEntity? {
+        val current = bookkeeping.attachmentById(id) ?: return null
+        val now = Instant.now().toString()
+        val deleted = current.copy(deletedAt = now, updatedAt = now, localVersion = current.localVersion + 1, modifiedByDevice = deviceId)
+        db.withTransaction { bookkeeping.upsertAttachment(deleted); sync.enqueue(deleteOutbox("finance.transaction_attachment", id, current.serverVersion ?: "0", now)) }
+        return current
     }
 
     suspend fun createBudget(
@@ -574,4 +714,10 @@ class FinanceRepository(private val db: FinanceDatabase, private val deviceId: S
         changeId = UUID.randomUUID().toString(), entityType = entityType, entityId = entityId, operation = "delete",
         baseServerVersion = base, clientModifiedAt = modifiedAt, payloadJson = null,
     )
+
+    private fun String.isBillImport(): Boolean = contains("import", ignoreCase = true)
+
+    private companion object {
+        const val IMPORT_MATCH_WINDOW_SECONDS = 30L * 60L
+    }
 }

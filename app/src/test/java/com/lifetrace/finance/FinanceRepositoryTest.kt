@@ -76,7 +76,7 @@ class FinanceRepositoryTest {
         assertTrue(db.syncDao().state()!!.snapshotRequired)
     }
 
-    @Test fun importedConfirmedTransactionWithoutCategoryNeedsReview() = runBlocking {
+    @Test fun newImportedTransactionWithoutCategoryNeedsReview() = runBlocking {
         val profile = repo.ensureProfile()
         val account = repo.accounts(profile.id).first().first()
         val id = repo.createTransaction(
@@ -89,9 +89,96 @@ class FinanceRepositoryTest {
             sourceType = "bill_import",
         )
         assertEquals(id, repo.inbox(profile.id).first().single().id)
+        assertEquals("candidate", repo.transactions(profile.id).first().single().status)
         val food = repo.categories(profile.id).first().first { it.name == "餐饮" }
         repo.confirmCandidate(id, food.id)
         assertTrue(repo.inbox(profile.id).first().isEmpty())
+    }
+
+    @Test fun historicalConfirmedTransactionWithoutCategoryIsNotReclassified() = runBlocking {
+        val profile = repo.ensureProfile()
+        val account = repo.accounts(profile.id).first().first()
+        repo.createTransaction(
+            profile.id,
+            TransactionType.EXPENSE,
+            1800,
+            account.id,
+            categoryId = null,
+            status = TransactionStatus.CONFIRMED,
+            sourceType = "manual",
+        )
+        assertTrue(repo.inbox(profile.id).first().isEmpty())
+    }
+
+    @Test fun billImportMergesWithSingleMatchingManualTransactionAndKeepsManualFields() = runBlocking {
+        val profile = repo.ensureProfile()
+        val account = repo.accounts(profile.id).first().first()
+        val category = repo.categories(profile.id).first().first { it.categoryType == "expense" }
+        val manualTime = java.time.Instant.parse("2026-08-11T10:00:00Z")
+        val manualId = repo.createTransaction(
+            profile.id,
+            TransactionType.EXPENSE,
+            2880,
+            account.id,
+            categoryId = category.id,
+            merchant = null,
+            note = "手工备注",
+            occurredAt = manualTime,
+        )
+
+        val importedId = repo.createTransaction(
+            profile.id,
+            TransactionType.EXPENSE,
+            2880,
+            account.id,
+            merchant = "微信商户",
+            sourceType = "wechat_bill_import",
+            externalTransactionId = "WX-ORDER-1",
+            occurredAt = manualTime.plusSeconds(5 * 60),
+        )
+
+        assertEquals(manualId, importedId)
+        val merged = repo.transactions(profile.id).first().single()
+        assertEquals(category.id, merged.categoryId)
+        assertEquals("手工备注", merged.note)
+        assertEquals("微信商户", merged.merchant)
+        assertEquals("manual", merged.sourceType)
+        assertEquals("WX-ORDER-1", merged.externalTransactionId)
+        assertEquals(1, db.financeDao().evidenceForTransaction(manualId).size)
+
+        val duplicateId = repo.createTransaction(
+            profile.id,
+            TransactionType.EXPENSE,
+            2880,
+            account.id,
+            sourceType = "wechat_bill_import",
+            externalTransactionId = "WX-ORDER-1",
+            occurredAt = manualTime.plusSeconds(5 * 60),
+        )
+        assertEquals(manualId, duplicateId)
+        assertEquals(1, repo.transactions(profile.id).first().size)
+        assertEquals(1, db.financeDao().evidenceForTransaction(manualId).size)
+    }
+
+    @Test fun ambiguousManualMatchesAreNotMergedAutomatically() = runBlocking {
+        val profile = repo.ensureProfile()
+        val account = repo.accounts(profile.id).first().first()
+        val time = java.time.Instant.parse("2026-08-11T12:00:00Z")
+        repo.createTransaction(profile.id, TransactionType.EXPENSE, 1000, account.id, occurredAt = time.minusSeconds(60))
+        repo.createTransaction(profile.id, TransactionType.EXPENSE, 1000, account.id, occurredAt = time.plusSeconds(60))
+
+        val importedId = repo.createTransaction(
+            profile.id,
+            TransactionType.EXPENSE,
+            1000,
+            account.id,
+            sourceType = "alipay_bill_import",
+            externalTransactionId = "ALI-ORDER-1",
+            occurredAt = time,
+        )
+
+        assertEquals(3, repo.transactions(profile.id).first().size)
+        assertEquals(importedId, repo.inbox(profile.id).first().single().id)
     }
 
     @Test fun standardCategoriesAreSeededWithoutDuplicates() = runBlocking {

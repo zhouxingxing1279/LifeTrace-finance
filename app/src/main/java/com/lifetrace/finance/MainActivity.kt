@@ -17,6 +17,9 @@ class MainActivity : ComponentActivity() {
         SyncScheduler.ensurePeriodic(this)
         RecurringScheduler.ensurePeriodic(this)
         RecurringScheduler.scheduleNow(this)
+        com.lifetrace.finance.sync.BudgetAlertScheduler.ensurePeriodic(this)
+        com.lifetrace.finance.sync.BudgetAlertScheduler.scheduleNow(this)
+        com.lifetrace.finance.sync.DailyReminderScheduler.update(this)
         AppGraph.get(this).screenshotMonitor.restore()
         val shortcutHost = intent?.data?.host
         val shortcutType = intent?.data?.pathSegments?.firstOrNull()

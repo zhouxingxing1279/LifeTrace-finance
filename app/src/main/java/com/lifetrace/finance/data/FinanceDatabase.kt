@@ -236,7 +236,7 @@ interface FinanceDao {
     @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND deleted_at IS NULL ORDER BY occurred_at DESC")
     fun transactions(profileId: String): Flow<List<TransactionEntity>>
 
-    @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND deleted_at IS NULL AND (status IN ('candidate','provisional') OR (category_id IS NULL AND transaction_type NOT IN ('transfer','refund'))) ORDER BY occurred_at DESC")
+    @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND deleted_at IS NULL AND status IN ('candidate','provisional') ORDER BY occurred_at DESC")
     fun inbox(profileId: String): Flow<List<TransactionEntity>>
 
     @Query("SELECT * FROM finance_accounts WHERE local_profile_id=:profileId AND deleted_at IS NULL AND is_archived=0 AND is_hidden=0 ORDER BY sort_order, name")
@@ -254,8 +254,23 @@ interface FinanceDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertEvidence(value: TransactionEvidenceEntity)
 
     @Query("SELECT * FROM finance_transactions WHERE id=:id LIMIT 1") suspend fun transactionById(id: String): TransactionEntity?
+    @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND external_transaction_id=:externalTransactionId AND deleted_at IS NULL LIMIT 1")
+    suspend fun transactionByExternalId(profileId: String, externalTransactionId: String): TransactionEntity?
+    @Query("SELECT * FROM finance_transactions WHERE local_profile_id=:profileId AND transaction_type=:transactionType AND amount_cents=:amountCents AND source_type='manual' AND status='confirmed' AND deleted_at IS NULL AND occurred_at BETWEEN :fromOccurredAt AND :toOccurredAt ORDER BY occurred_at")
+    suspend fun matchingManualTransactions(
+        profileId: String,
+        transactionType: String,
+        amountCents: Long,
+        fromOccurredAt: String,
+        toOccurredAt: String,
+    ): List<TransactionEntity>
     @Query("SELECT * FROM finance_accounts WHERE id=:id LIMIT 1") suspend fun accountById(id: String): AccountEntity?
+    @Query("SELECT * FROM finance_accounts WHERE id=:id LIMIT 1") fun accountFlow(id: String): Flow<AccountEntity?>
+    @Query("SELECT * FROM finance_transactions WHERE deleted_at IS NULL AND status='confirmed' AND (account_id=:accountId OR to_account_id=:accountId) ORDER BY occurred_at DESC")
+    fun transactionsForAccount(accountId: String): Flow<List<TransactionEntity>>
     @Query("SELECT * FROM finance_categories WHERE id=:id LIMIT 1") suspend fun categoryById(id: String): CategoryEntity?
+    @Query("SELECT * FROM finance_transaction_evidence WHERE transaction_id=:transactionId AND deleted_at IS NULL ORDER BY created_at")
+    suspend fun evidenceForTransaction(transactionId: String): List<TransactionEvidenceEntity>
 
     @Query("UPDATE finance_transactions SET server_version=:version WHERE id=:id") suspend fun setTransactionServerVersion(id: String, version: String)
     @Query("UPDATE finance_accounts SET server_version=:version WHERE id=:id") suspend fun setAccountServerVersion(id: String, version: String)
@@ -329,6 +344,7 @@ interface DiagnosticDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(value: DiagnosticEventEntity)
     @Query("SELECT * FROM diagnostic_events ORDER BY timestamp DESC LIMIT :limit") fun recent(limit: Int = 200): Flow<List<DiagnosticEventEntity>>
     @Query("DELETE FROM diagnostic_events WHERE id NOT IN (SELECT id FROM diagnostic_events ORDER BY timestamp DESC LIMIT 1000)") suspend fun trim()
+    @Query("DELETE FROM diagnostic_events") suspend fun clearAll()
 }
 
 @Database(

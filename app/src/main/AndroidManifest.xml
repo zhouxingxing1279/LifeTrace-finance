@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".LifeTraceFinanceApplication"
@@ -13,6 +14,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.LifeTraceFinance"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
 
         <activity
             android:name=".MainActivity"
@@ -65,6 +74,40 @@
         </activity>
 
         <activity
+            android:name=".ui.ServerSettingsActivity"
+            android:exported="false"
+            android:label="服务器设置" />
+
+        <activity
+            android:name=".ui.SyncStatusActivity"
+            android:exported="false"
+            android:label="同步状态" />
+
+        <activity
+            android:name=".ui.AccountDetailActivity"
+            android:exported="false"
+            android:label="账户详情" />
+
+        <activity
+            android:name=".ui.CalendarActivity"
+            android:exported="false"
+            android:label="账单日历" />
+
+        <activity
+            android:name=".ui.DataMaintenanceActivity"
+            android:exported="false"
+            android:label="数据管理" />
+
+        <activity
+            android:name=".ui.AppearanceSettingsActivity"
+            android:exported="false"
+            android:label="外观与隐私" />
+
+        <activity android:name=".ui.ShortcutsGuideActivity" android:exported="false" android:label="快捷方式指南" />
+        <activity android:name=".ui.LogCenterActivity" android:exported="false" android:label="日志中心" />
+        <activity android:name=".ui.StorageManagementActivity" android:exported="false" android:label="存储空间管理" />
+
+        <activity
             android:name=".platform.ShareReceiverActivity"
             android:exported="true"
             android:theme="@style/Theme.LifeTraceFinance.Transparent">
@@ -75,6 +118,7 @@
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
             </intent-filter>

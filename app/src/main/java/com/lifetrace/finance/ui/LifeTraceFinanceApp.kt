@@ -41,6 +41,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 
 private enum class Destination(val label: String) {
     HOME("首页"), TRANSACTIONS("明细"), QUICK("记账"), INBOX("待确认"), REPORTS("统计"), PROFILE("我的")
@@ -74,6 +75,11 @@ fun LifeTraceFinanceApp(vm: FinanceViewModel, initialDestination: String, shared
     var quickType by remember { mutableStateOf(initialTransactionType) }
     val message by vm.message.collectAsState()
     val inbox by vm.inbox.collectAsState()
+    LaunchedEffect(message) {
+        val shownMessage = message ?: return@LaunchedEffect
+        delay(if (shownMessage.error) 5_000L else 3_000L)
+        vm.dismissMessage(shownMessage)
+    }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -116,7 +122,10 @@ fun LifeTraceFinanceApp(vm: FinanceViewModel, initialDestination: String, shared
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             message?.let { msg ->
-                Surface(color = if (msg.error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer) {
+                Surface(
+                    modifier = Modifier.clickable { vm.dismissMessage(msg) },
+                    color = if (msg.error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
+                ) {
                     Text(msg.text, Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp))
                 }
             }

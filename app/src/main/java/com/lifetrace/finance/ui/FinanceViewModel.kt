@@ -2,6 +2,7 @@ package com.lifetrace.finance.ui
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lifetrace.finance.AppGraph
@@ -31,6 +32,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     val authenticated = _authenticated.asStateFlow()
     val smartCaptureState = graph.autoBilling.state
 
+    fun dismissMessage(message: UiMessage) {
+        _message.compareAndSet(message, null)
+    }
+
     val ledgers: StateFlow<List<LedgerEntity>> = _profile.filterNotNull()
         .flatMapLatest { manager.ledgers(it.id) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -38,6 +43,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     val transactions: StateFlow<List<TransactionEntity>> = ledgerScoped { profileId, ledgerId -> manager.transactions(profileId, ledgerId) }
     val accounts: StateFlow<List<AccountEntity>> = ledgerScoped { profileId, ledgerId -> manager.accounts(profileId, ledgerId) }
     val categories: StateFlow<List<CategoryEntity>> = ledgerScoped { profileId, ledgerId -> manager.categories(profileId, ledgerId) }
+    val tags: StateFlow<List<TagEntity>> = ledgerScoped { profileId, ledgerId -> manager.tags(profileId, ledgerId) }
+    val transactionTags: StateFlow<List<TransactionTagEntity>> = _profile.filterNotNull()
+        .flatMapLatest { manager.transactionTags(it.id) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val inbox: StateFlow<List<TransactionEntity>> = combine(_profile, _selectedLedgerId) { profile, ledgerId -> profile?.id to ledgerId }
         .flatMapLatest { (profileId, ledgerId) ->
             if (profileId == null || ledgerId == null) flowOf(emptyList())
@@ -135,6 +144,44 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         runCatching { repo.deleteTransaction(id) }
             .onSuccess { _message.value = UiMessage("账单已删除，可通过同步墓碑传播"); SyncScheduler.scheduleNow(getApplication()) }
             .onFailure { _message.value = UiMessage(it.message ?: "删除失败", true) }
+    }
+
+    fun updateTransactionDetails(id: String, typeWire: String, amountText: String, accountId: String?, toAccountId: String?, categoryId: String?, merchant: String?, note: String?, dateText: String) {
+        val type = TransactionType.fromWire(typeWire)
+        val cents = MoneyParser.parseCents(amountText)
+        val date = runCatching { LocalDate.parse(dateText) }.getOrNull()
+        if (type == null) { _message.value = UiMessage("请选择账单类型", true); return }
+        if (cents == null || cents <= 0) { _message.value = UiMessage("请输入有效金额", true); return }
+        if (date == null) { _message.value = UiMessage("请输入正确日期", true); return }
+        if (accountId != null && accounts.value.none { it.id == accountId }) { _message.value = UiMessage("账户不属于当前账本", true); return }
+        if (type == TransactionType.TRANSFER && (accountId == null || toAccountId == null || accountId == toAccountId)) {
+            _message.value = UiMessage("转账需要选择两个不同账户", true); return
+        }
+        if (categoryId != null && categories.value.none { it.id == categoryId }) { _message.value = UiMessage("分类不属于当前账本", true); return }
+        viewModelScope.launch {
+            runCatching { repo.updateTransactionDetails(id, type, cents, accountId, toAccountId, categoryId, merchant, note, date) }
+                .onSuccess { _message.value = UiMessage("账单已更新"); SyncScheduler.scheduleNow(getApplication()) }
+                .onFailure { _message.value = UiMessage(it.message ?: "更新失败", true) }
+        }
+    }
+
+    fun attachments(transactionId: String): Flow<List<TransactionAttachmentEntity>> = manager.attachmentsForTransaction(transactionId)
+
+    fun importAttachment(transactionId: String, uri: Uri) = viewModelScope.launch {
+        val profileId = _profile.value?.id ?: return@launch
+        runCatching {
+            val stored = com.lifetrace.finance.domain.AttachmentFileStore(getApplication()).import(uri)
+            manager.createAttachment(profileId, transactionId, stored.fileName, stored.originalName, stored.fileSize, stored.width, stored.height, stored.sha256)
+        }.onSuccess { _message.value = UiMessage("附件已添加"); SyncScheduler.scheduleNow(getApplication()) }
+            .onFailure { _message.value = UiMessage("附件添加失败：${it.message}", true) }
+    }
+
+    fun deleteAttachment(attachment: TransactionAttachmentEntity) = viewModelScope.launch {
+        runCatching {
+            manager.deleteAttachment(attachment.id)
+            com.lifetrace.finance.domain.AttachmentFileStore(getApplication()).delete(attachment.fileName)
+        }.onSuccess { _message.value = UiMessage("附件已删除"); SyncScheduler.scheduleNow(getApplication()) }
+            .onFailure { _message.value = UiMessage("附件删除失败：${it.message}", true) }
     }
 
     fun confirm(id: String, categoryId: String? = null) = viewModelScope.launch { repo.confirmCandidate(id, categoryId); SyncScheduler.scheduleNow(getApplication()) }

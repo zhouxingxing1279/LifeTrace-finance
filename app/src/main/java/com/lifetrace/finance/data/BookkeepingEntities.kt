@@ -186,6 +186,12 @@ interface BookkeepingDao {
     @Query("SELECT t.* FROM finance_tags t INNER JOIN finance_transaction_tags r ON t.id=r.tag_id WHERE r.transaction_id=:transactionId AND r.deleted_at IS NULL AND t.deleted_at IS NULL ORDER BY t.sort_order, t.name")
     fun tagsForTransaction(transactionId: String): Flow<List<TagEntity>>
 
+    @Query("SELECT * FROM finance_transaction_tags WHERE local_profile_id=:profileId AND deleted_at IS NULL")
+    fun transactionTags(profileId: String): Flow<List<TransactionTagEntity>>
+
+    @Query("SELECT * FROM finance_transaction_attachments WHERE transaction_id=:transactionId AND deleted_at IS NULL ORDER BY sort_order, created_at")
+    fun attachmentsForTransaction(transactionId: String): Flow<List<TransactionAttachmentEntity>>
+
     @Query("SELECT * FROM finance_transaction_tags WHERE transaction_id=:transactionId AND tag_id=:tagId AND deleted_at IS NULL LIMIT 1")
     suspend fun transactionTag(transactionId: String, tagId: String): TransactionTagEntity?
 

@@ -30,7 +30,7 @@ class AiSettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val graph = AppGraph.get(applicationContext)
-        val hasPendingImage = graph.pendingShare.peek() != null
+        val pendingImageCount = graph.pendingShare.peekAll().size
 
         setContent {
             LifeTraceTheme {
@@ -58,8 +58,8 @@ class AiSettingsActivity : ComponentActivity() {
                 ) {
                     Text("智能截图记账", style = MaterialTheme.typography.headlineSmall)
                     Text("截图由 Android 直接发送给 Vision API；LifeTrace Cloud、桌面端和浏览器端不会接收原始图片。", style = MaterialTheme.typography.bodyMedium)
-                    if (hasPendingImage) {
-                        Text("已收到一张待识别截图，保存配置后会自动继续识别。", color = MaterialTheme.colorScheme.primary)
+                    if (pendingImageCount > 0) {
+                        Text("已收到 $pendingImageCount 张待识别图片，保存配置后会依次继续识别。", color = MaterialTheme.colorScheme.primary)
                     }
 
                     Card(Modifier.fillMaxWidth()) {
@@ -109,13 +109,13 @@ class AiSettingsActivity : ComponentActivity() {
                                     if (graph.screenshotMonitor.hasMediaPermission()) graph.screenshotMonitor.start()
                                     else permissionLauncher.launch(graph.screenshotMonitor.requiredPermission())
                                 }
-                                val pendingImagePath = graph.pendingShare.consume()
-                                pendingImagePath?.let { path ->
-                                    graph.autoBilling.submitImage(Uri.fromFile(File(path)), "share_receiver", deleteAfter = true)
+                                val pendingImagePaths = graph.pendingShare.consumeAll()
+                                if (pendingImagePaths.isNotEmpty()) {
+                                    graph.autoBilling.submitImages(pendingImagePaths.map { Uri.fromFile(File(it)) }, "share_receiver", deleteAfter = true)
                                 }
                                 message = "Vision 配置已保存"
                                 error = null
-                                if (pendingImagePath == null) finish()
+                                if (pendingImagePaths.isEmpty()) finish()
                                 else {
                                     startActivity(android.content.Intent(this@AiSettingsActivity, com.lifetrace.finance.MainActivity::class.java).putExtra("destination", "inbox"))
                                     finish()

@@ -17,6 +17,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.security.MessageDigest
 
@@ -25,6 +27,12 @@ data class SmartCaptureState(
     val lastMessage: String? = null,
     val lastError: String? = null,
     val lastBillCount: Int = 0,
+)
+
+private data class ImageProcessingResult(
+    val createdBills: Int = 0,
+    val skipped: Boolean = false,
+    val error: String? = null,
 )
 
 class AutoBillingService(
@@ -39,22 +47,60 @@ class AutoBillingService(
     private val app = context.applicationContext
     private val resolver: ContentResolver = app.contentResolver
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val processingMutex = Mutex()
     private val _state = MutableStateFlow(SmartCaptureState())
     val state = _state.asStateFlow()
 
     fun submitImage(uri: Uri, source: String, deleteAfter: Boolean = false): Job = scope.launch {
-        processImage(uri, source, deleteAfter)
+        processingMutex.withLock { processImageInternal(uri, source, deleteAfter, publishState = true) }
+    }
+
+    fun submitImages(uris: List<Uri>, source: String, deleteAfter: Boolean = false): Job = scope.launch {
+        processingMutex.withLock {
+            val images = uris.distinctBy(Uri::toString)
+            if (images.isEmpty()) return@withLock
+            _state.value = SmartCaptureState(running = true, lastMessage = "正在识别 0/${images.size} 张图片")
+            var createdBills = 0
+            var succeededImages = 0
+            var skippedImages = 0
+            var failedImages = 0
+            images.forEachIndexed { index, uri ->
+                _state.value = SmartCaptureState(
+                    running = true,
+                    lastMessage = "正在识别 ${index + 1}/${images.size} 张图片",
+                    lastBillCount = createdBills,
+                )
+                val result = processImageInternal(uri, source, deleteAfter, publishState = false)
+                createdBills += result.createdBills
+                when {
+                    result.error != null -> failedImages++
+                    result.skipped -> skippedImages++
+                    else -> succeededImages++
+                }
+            }
+            val summary = "批量识别完成：成功 $succeededImages 张，跳过 $skippedImages 张，失败 $failedImages 张，生成 $createdBills 笔待确认账单"
+            diagnostics.event("SMART_CAPTURE", "BATCH_COMPLETED", summary)
+            _state.value = if (failedImages == images.size) {
+                SmartCaptureState(lastError = summary, lastBillCount = createdBills)
+            } else {
+                SmartCaptureState(lastMessage = summary, lastBillCount = createdBills)
+            }
+        }
     }
 
     suspend fun processImage(uri: Uri, source: String, deleteAfter: Boolean = false) {
-        _state.value = SmartCaptureState(running = true, lastMessage = "正在识别账单截图")
+        processingMutex.withLock { processImageInternal(uri, source, deleteAfter, publishState = true) }
+    }
+
+    private suspend fun processImageInternal(uri: Uri, source: String, deleteAfter: Boolean, publishState: Boolean): ImageProcessingResult {
+        if (publishState) _state.value = SmartCaptureState(running = true, lastMessage = "正在识别账单截图")
         try {
             if (!providerFactory.isVisionConfigured()) error("请先配置 Vision API Key")
             val bytes = waitAndRead(uri) ?: error("图片尚未写入完成或无法读取")
             val hash = sha256(bytes)
             if (processedImages.contains(hash)) {
-                _state.value = SmartCaptureState(lastMessage = "这张截图已经处理过")
-                return
+                if (publishState) _state.value = SmartCaptureState(lastMessage = "这张截图已经处理过")
+                return ImageProcessingResult(skipped = true)
             }
             val mime = detectMime(bytes) ?: error("仅支持 PNG/JPEG/WebP 图片")
             val profile = finance.ensureProfile()
@@ -62,8 +108,8 @@ class AutoBillingService(
             if (bills.isEmpty()) {
                 processedImages.remember(hash)
                 diagnostics.event("SMART_CAPTURE", "NOT_A_BILL", "image rejected by bill guard source=$source")
-                _state.value = SmartCaptureState(lastMessage = "图片未识别为账单")
-                return
+                if (publishState) _state.value = SmartCaptureState(lastMessage = "图片未识别为账单")
+                return ImageProcessingResult(skipped = true)
             }
 
             val creation = billCreation.createBills(
@@ -72,7 +118,14 @@ class AutoBillingService(
                 sourceType = "vision_screenshot:${visionResult.providerId}:${visionResult.model}",
             )
             if (creation.transactionIds.isEmpty()) {
-                error("识别到 ${bills.size} 笔交易，但没有可创建的账单")
+                processedImages.remember(hash)
+                diagnostics.event(
+                    "SMART_CAPTURE",
+                    "BILLS_SKIPPED",
+                    "recognized=${bills.size} skipped=${creation.skipped} source=$source provider=${visionResult.providerId} model=${visionResult.model}",
+                )
+                if (publishState) _state.value = SmartCaptureState(lastMessage = "识别到的账单已存在或信息不足，未重复记入")
+                return ImageProcessingResult(skipped = true)
             }
             processedImages.remember(hash)
             diagnostics.event(
@@ -81,17 +134,16 @@ class AutoBillingService(
                 "created=${creation.transactionIds.size} skipped=${creation.skipped} source=$source provider=${visionResult.providerId} model=${visionResult.model}",
             )
             SyncScheduler.scheduleNow(app)
-            _state.value = SmartCaptureState(
-                lastMessage = "已识别 ${creation.transactionIds.size} 笔账单，请在待确认中检查",
-                lastBillCount = creation.transactionIds.size,
-            )
+            if (publishState) _state.value = SmartCaptureState(lastMessage = "已识别 ${creation.transactionIds.size} 笔账单，请确认后入账", lastBillCount = creation.transactionIds.size)
+            return ImageProcessingResult(createdBills = creation.transactionIds.size)
         } catch (error: Throwable) {
             val message = error.message?.take(180) ?: "截图识别失败"
             diagnostics.event("SMART_CAPTURE", "FAILED", message, level = "WARN")
-            _state.value = SmartCaptureState(lastError = message)
+            if (publishState) _state.value = SmartCaptureState(lastError = message)
+            return ImageProcessingResult(error = message)
         } finally {
             if (deleteAfter && uri.scheme == "file") runCatching { uri.path?.let(::File)?.delete() }
-            if (_state.value.running) _state.value = _state.value.copy(running = false)
+            if (publishState && _state.value.running) _state.value = _state.value.copy(running = false)
         }
     }
 

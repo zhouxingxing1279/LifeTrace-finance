@@ -7,6 +7,9 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -17,10 +20,12 @@ private val BeeYellow = Color(0xFFFFC928)
 private val BeeYellowDeep = Color(0xFFF3B900)
 private val BeeInk = Color(0xFF17191F)
 
-private val LightColors = lightColorScheme(
-    primary = BeeYellow,
+private data class AccentPalette(val primary: Color, val lightContainer: Color, val darkContainer: Color)
+
+private fun lightColors(accent: AccentPalette) = lightColorScheme(
+    primary = accent.primary,
     onPrimary = BeeInk,
-    primaryContainer = Color(0xFFFFE9A6),
+    primaryContainer = accent.lightContainer,
     onPrimaryContainer = BeeInk,
     secondary = Color(0xFF635A75),
     onSecondary = Color.White,
@@ -35,11 +40,11 @@ private val LightColors = lightColorScheme(
     error = Color(0xFFBA1A1A),
 )
 
-private val DarkColors = darkColorScheme(
-    primary = BeeYellow,
+private fun darkColors(accent: AccentPalette) = darkColorScheme(
+    primary = accent.primary,
     onPrimary = Color(0xFF171717),
-    primaryContainer = Color(0xFF4B3B00),
-    onPrimaryContainer = Color(0xFFFFE9A6),
+    primaryContainer = accent.darkContainer,
+    onPrimaryContainer = accent.primary,
     secondary = Color(0xFFCFC4DC),
     background = Color.Black,
     surface = Color(0xFF101010),
@@ -67,8 +72,22 @@ private val AppShapes = Shapes(
 
 @Composable
 fun LifeTraceTheme(content: @Composable () -> Unit) {
+    val context = LocalContext.current
+    val revision by com.lifetrace.finance.domain.AppearanceSettings.changes.collectAsState()
+    val settings = com.lifetrace.finance.domain.AppearanceSettings(context)
+    val useDark = when (settings.themeMode) {
+        com.lifetrace.finance.domain.ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        com.lifetrace.finance.domain.ThemeMode.LIGHT -> false
+        com.lifetrace.finance.domain.ThemeMode.DARK -> true
+    }
+    val accent = when (settings.accent) {
+        "green" -> AccentPalette(Color(0xFF55A86B), Color(0xFFD8F3DF), Color(0xFF173D21))
+        "blue" -> AccentPalette(Color(0xFF4F9DDE), Color(0xFFD6ECFF), Color(0xFF173A55))
+        "rose" -> AccentPalette(Color(0xFFEC7180), Color(0xFFFFDDE1), Color(0xFF5A2029))
+        else -> AccentPalette(BeeYellow, Color(0xFFFFE9A6), Color(0xFF4B3B00))
+    }
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
+        colorScheme = if (useDark) darkColors(accent) else lightColors(accent),
         typography = AppTypography,
         shapes = AppShapes,
         content = content,

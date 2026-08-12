@@ -27,6 +27,10 @@ class BookkeepingManagementViewModel(application: Application) : AndroidViewMode
     private val _message = MutableStateFlow<UiMessage?>(null)
     val message = _message.asStateFlow()
 
+    fun dismissMessage(message: UiMessage) {
+        _message.compareAndSet(message, null)
+    }
+
     val ledgers: StateFlow<List<LedgerEntity>> = _profile.filterNotNull()
         .flatMapLatest { manager.ledgers(it.id) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -136,23 +140,32 @@ class BookkeepingManagementViewModel(application: Application) : AndroidViewMode
         )
     }
 
-    fun createCategory(name: String, type: TransactionType, parentId: String?) = mutate("分类已创建") {
+    fun createCategory(name: String, type: TransactionType, parentId: String?, icon: String? = null) = mutate("分类已创建") {
         manager.createCategory(
             requireNotNull(_profile.value).id,
             requireNotNull(_selectedLedgerId.value),
             name,
             type,
             parentId,
+            icon,
         )
     }
 
     fun archiveCategory(id: String) = mutate("分类已归档") { manager.archiveCategory(id) }
+
+    fun updateCategory(id: String, name: String, parentId: String?, icon: String?) = mutate("分类已更新") {
+        manager.updateCategory(id, name, parentId, icon)
+    }
+
+    fun moveCategory(id: String, direction: Int) = mutate("分类顺序已更新") { manager.moveCategory(id, direction) }
 
     fun createTag(name: String, color: String?) = mutate("标签已创建") {
         manager.createTag(requireNotNull(_profile.value).id, requireNotNull(_selectedLedgerId.value), name, color)
     }
 
     fun archiveTag(id: String) = mutate("标签已归档") { manager.archiveTag(id) }
+
+    fun updateTag(id: String, name: String, color: String?) = mutate("标签已更新") { manager.updateTag(id, name, color) }
 
     fun addTag(transactionId: String, tagId: String) = mutate("已添加标签") {
         manager.addTag(requireNotNull(_profile.value).id, transactionId, tagId)
@@ -178,6 +191,14 @@ class BookkeepingManagementViewModel(application: Application) : AndroidViewMode
     fun setBudgetEnabled(id: String, enabled: Boolean) = mutate(if (enabled) "预算已启用" else "预算已停用") {
         manager.setBudgetEnabled(id, enabled)
     }
+
+    fun updateBudget(id: String, amount: String, categoryId: String?, period: String, startDay: Int) {
+        val cents = MoneyParser.parseCents(amount)
+        if (cents == null || cents <= 0) { _message.value = UiMessage("预算金额无效", true); return }
+        mutate("预算已更新") { manager.updateBudget(id, cents, categoryId, period, startDay) }
+    }
+
+    fun archiveBudget(id: String) = mutate("预算已删除") { manager.archiveBudget(id) }
 
     fun createRecurring(
         type: TransactionType,
@@ -222,6 +243,17 @@ class BookkeepingManagementViewModel(application: Application) : AndroidViewMode
         manager.setRecurringEnabled(id, enabled)
     }
 
+    fun updateRecurring(id: String, form: RecurringFormData) {
+        val cents = MoneyParser.parseCents(form.amount)
+        if (cents == null || cents <= 0) { _message.value = UiMessage("周期金额无效", true); return }
+        mutate("周期规则已更新") {
+            manager.updateRecurring(id, form.type, cents, form.accountId, form.toAccountId, form.categoryId, form.note,
+                form.frequency, form.interval, form.startDate, form.dayOfMonth, form.dayOfWeek, form.monthOfYear, form.endDate)
+        }
+    }
+
+    fun archiveRecurring(id: String) = mutate("周期规则已删除") { manager.archiveRecurring(id) }
+
     fun runRecurringNow() = viewModelScope.launch {
         runCatching { manager.executeDueRecurring(requireNotNull(_profile.value).id) }
             .onSuccess { count ->
@@ -250,3 +282,9 @@ class BookkeepingManagementViewModel(application: Application) : AndroidViewMode
             .onFailure { _message.value = UiMessage(it.message ?: "操作失败", true) }
     }
 }
+
+data class RecurringFormData(
+    val type: TransactionType, val amount: String, val accountId: String?, val toAccountId: String?,
+    val categoryId: String?, val note: String?, val frequency: String, val interval: Int,
+    val startDate: LocalDate, val dayOfMonth: Int?, val dayOfWeek: Int?, val monthOfYear: Int?, val endDate: LocalDate?,
+)
