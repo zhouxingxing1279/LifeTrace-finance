@@ -1,12 +1,15 @@
 package com.lifetrace.finance.ai
 
 import com.lifetrace.finance.core.TransactionType
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import java.time.Instant
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class SmartCaptureAiTests {
     @Test
     fun billGuardContainsAccountsCategoriesAndNonBillRule() {
