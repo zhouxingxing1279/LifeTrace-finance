@@ -120,7 +120,7 @@ ShareReceiverActivity          ScreenshotObserver
 `ScreenshotMonitorService` 使用 `ContentObserver + MediaStore.Images`：
 
 - 用户显式开启后注册；关闭立即注销；
-- Application 启动时只恢复之前已启用且权限仍有效的监听；
+- `MainActivity` 启动时只恢复之前已启用且权限仍有效的监听；
 - Android 13+ 使用 `READ_MEDIA_IMAGES`；Android 12 及以下使用 `READ_EXTERNAL_STORAGE`；
 - 第一版不使用永久前台服务，进程被系统回收后不承诺持续监听；
 - 系统分享始终作为可靠 fallback。
