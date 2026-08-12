@@ -49,6 +49,8 @@ object JsonResponseParser {
             item = clean(obj.optNullableString("item"), 160),
             occurredAt = parseInstant(obj.optNullableString("occurredAt")),
             account = clean(obj.optNullableString("account"), 120),
+            fromAccount = clean(obj.optNullableString("fromAccount"), 120),
+            toAccount = clean(obj.optNullableString("toAccount"), 120),
             category = clean(obj.optNullableString("category"), 80),
             externalTransactionId = clean(obj.optNullableString("externalTransactionId"), 160),
             confidence = confidence,
