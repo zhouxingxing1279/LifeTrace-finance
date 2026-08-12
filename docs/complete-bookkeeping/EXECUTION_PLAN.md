@@ -1,6 +1,6 @@
 # LifeTrace Finance — 完整记账能力补全执行方案
 
-状态：IMPLEMENTING
+状态：COMPLETE
 
 分支：`feature/complete-bookkeeping-ui-import`
 
@@ -16,7 +16,7 @@ Room v2 与现有 Cloud 已支持：Ledger、Account、Category、Transaction、
 
 ## 2. 账单导入权威规则
 
-Android 导入语义复用 LifeTrace EPIC-13 PR #5 的 `web-client/src/importer.ts`，不重新定义一套平台规则。
+Android 导入语义复用 LifeTrace EPIC-13 `web-client/src/importer.ts` 的字段与映射语义，不重新定义一套平台规则。
 
 复用以下规则：
 
@@ -37,7 +37,7 @@ Android 导入语义复用 LifeTrace EPIC-13 PR #5 的 `web-client/src/importer.
 - 状态：成功/完成/confirmed→confirmed，其余→candidate；
 - 单行失败产生 warning，不让整文件失败。
 
-Android 文件层支持 CSV 和 XLS/XLSX 入口；XLSX 读取后统一进入相同 row mapper。正式交易全部通过 `FinanceRepository` 写 Room + Outbox。
+Android 文件层正式支持 CSV 与 XLSX。`.xls` 入口会兼容被错误标记为 Excel MIME 的 CSV、或实际为 OOXML ZIP 的文件；旧版二进制 BIFF `.xls` 会明确提示用户改导出 CSV/XLSX。XLSX 读取后统一进入相同 row mapper。正式交易全部通过 `FinanceRepository` 写 Room + Outbox。
 
 ## 3. 导入与对账
 
@@ -80,7 +80,7 @@ Android 文件层支持 CSV 和 XLS/XLSX 入口；XLSX 读取后统一进入相�
 - 幂等键：`recurring:<ruleId>:<occurrenceDate>`；
 - 生成账单写 `recurringTransactionId`、`sourceType=recurring`；
 - 成功后更新 `lastGeneratedDate`；
-- App 启动和 WorkManager 同步周期均执行到期检查，重复运行不重复入账。
+- App 启动和 WorkManager 周期均执行到期检查，重复运行不重复入账。
 
 ## 8. 高级账户设置
 
@@ -88,14 +88,14 @@ Android 文件层支持 CSV 和 XLS/XLSX 入口；XLSX 读取后统一进入相�
 
 ## 9. 附件边界
 
-保留并接入现有 TransactionAttachment metadata UI。若当前 LifeTrace Cloud 没有正式文件对象上传 API，则不伪造字节上传；只在已有文件能力可复用时接通真实附件，否则文档明确保留依赖边界。
+保留并接入现有 TransactionAttachment metadata 能力。当前轮次不伪造文件对象上传能力；如果 LifeTrace Cloud 后续提供正式文件对象 API，再接字节上传与下载。
 
 ## 10. 测试门禁
 
-必须覆盖：
+已覆盖：
 
 - LifeTrace importer 表头别名、CSV quote、金额、日期、类型、状态、warning；
-- XLSX 行读取；
+- XLSX 行读取与 XML/ZIP 安全防护；
 - external ID / fallback fingerprint 去重；
 - candidate 对账；
 - 多账本隔离；
@@ -107,11 +107,17 @@ Android 文件层支持 CSV 和 XLS/XLSX 入口；XLSX 读取后统一进入相�
 - Compose 关键入口可达；
 - lint、Debug、Release/R8、API 34 instrumentation。
 
+实现代码在 GitHub Actions run `31572036313` 验证：`verify` 与 `instrumentation` 均通过。该 run 覆盖 Core unit、Android JVM unit、lint、Debug build、Release R8 build、API 34 connected instrumentation。
+
 ## 11. 合并门禁
 
 1. 先提交本执行文档；
 2. 再实现代码；
 3. 更新完成报告和 README；
-4. PR CI 全绿；
+4. PR 最终 head CI 全绿；
 5. 最终 diff 不包含新 Cloud/新同步协议；
 6. 合并 `main`。
+
+## 12. 完成结论
+
+本轮已完成 Android 高级记账产品层与正式账单导入闭环，并保持 LifeTrace 现有 Room、Outbox、Auth、Cloud Sync 契约不变。账单文件导入、通知/Vision 候选、手工记账最终统一落到既有 Transaction 模型；多账本、账户、分类、标签、预算与周期规则均在同一账本上下文下工作。
