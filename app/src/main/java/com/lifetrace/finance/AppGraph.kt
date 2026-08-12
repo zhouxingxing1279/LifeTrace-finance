@@ -10,6 +10,7 @@ import com.lifetrace.finance.auth.AuthManager
 import com.lifetrace.finance.auth.SecureTokenStore
 import com.lifetrace.finance.automation.AutoBillingService
 import com.lifetrace.finance.automation.BillCreationService
+import com.lifetrace.finance.automation.PendingShareStore
 import com.lifetrace.finance.automation.ProcessedImageStore
 import com.lifetrace.finance.data.Diagnostics
 import com.lifetrace.finance.data.FinanceDatabase
@@ -38,6 +39,7 @@ class AppGraph private constructor(context: Context) {
     val aiBookkeeper = AiBookkeeper(finance, aiExtractionEngine)
     val billCreation = BillCreationService(finance)
     val processedImages = ProcessedImageStore(app)
+    val pendingShare = PendingShareStore(app)
     val autoBilling = AutoBillingService(
         context = app,
         finance = finance,
