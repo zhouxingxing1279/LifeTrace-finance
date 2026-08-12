@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 data class BillImportUiState(
     val loading: Boolean = false,
@@ -83,6 +84,7 @@ class BillImportViewModel(application: Application) : AndroidViewModel(applicati
                         else -> resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("无法读取账单文件")
                     }
                     require(bytes.size <= 25 * 1024 * 1024) { "账单文件超过 25 MiB" }
+                    if (looksLikeXlsx(fileName, mime, bytes)) XlsxSecurityGuard.validate(bytes)
                     fileName to BillImportParser.parse(fileName, mime, bytes)
                 }
             }.onSuccess { (name, preview) ->
@@ -109,6 +111,13 @@ class BillImportViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun clear() { _state.value = BillImportUiState() }
+
+    private fun looksLikeXlsx(fileName: String, mime: String?, bytes: ByteArray): Boolean {
+        val lower = fileName.lowercase(Locale.ROOT)
+        val zip = bytes.size >= 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
+        return lower.endsWith(".xlsx") || mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+            ((lower.endsWith(".xls") || mime == "application/vnd.ms-excel") && zip)
+    }
 
     private fun displayName(uri: Uri): String {
         if (uri.scheme == "file") return File(requireNotNull(uri.path)).name
