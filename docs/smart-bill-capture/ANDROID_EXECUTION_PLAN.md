@@ -35,6 +35,8 @@ BillCreationService               -> automation/BillCreationService.kt
 processed screenshot memory       -> automation/ProcessedImageStore.kt
 ```
 
+LifeTrace 额外增加 `PendingShareStore`，仅用于“用户已经分享截图但尚未配置 Vision Key”时在 App 私有存储中暂存临时文件路径。该路径不会通过 exported Activity 的 Intent extra 传递。
+
 ## 3. 完整调用链
 
 ```text
@@ -103,11 +105,13 @@ ShareReceiverActivity          ScreenshotObserver
 
 1. 接收 `image/*`；
 2. 把共享 URI 临时缓存到 app cache；
-3. 若 Vision 尚未配置，进入 `AiSettingsActivity`；
-4. 用户保存 API Key 后自动继续识别原截图；
+3. 若 Vision 尚未配置，把临时路径写入 App 私有 `PendingShareStore`，再进入 `AiSettingsActivity`；
+4. 用户保存 API Key 后从 `PendingShareStore` 一次性 consume 并自动继续识别原截图；
 5. 已配置时直接交给 `AutoBillingService`；
 6. 处理完成后删除临时图片；
 7. 打开待确认箱查看识别结果。
+
+`PendingShareStore` 只保存一个待处理路径；新的待处理截图会删除被覆盖的旧临时文件，显式 clear 也会删除缓存文件，避免长期遗留。
 
 分享入口不需要 `READ_MEDIA_IMAGES`，因此即使用户拒绝媒体读取权限仍可使用。
 
@@ -129,7 +133,7 @@ ShareReceiverActivity          ScreenshotObserver
 - `screen_shot`
 - `screen shot`
 
-同时只接受最近约 30 秒新增媒体，并使用约 500 ms observer debounce。
+同时只接受最近约 30 秒新增媒体，并使用约 500 ms observer debounce。查询 MediaStore 时按 `DATE_ADDED DESC` 排序并读取第一条，不在 `sortOrder` 中拼接非标准 `LIMIT`。
 
 ## 5. AutoBillingService
 
@@ -179,6 +183,8 @@ ShareReceiverActivity          ScreenshotObserver
 - `visionModel`
 - 图片 Base64
 - `PromptBuilder.billGuardForImage()` 生成的指令
+
+实际调用由 `AutoBillingService` 的 `Dispatchers.IO` 协程域发起，阻塞式 OkHttp 不占用主线程。
 
 第一版只实现本项目需要的 Vision capability，但 Provider 配置结构保留 BeeCount 的可扩展边界。
 
