@@ -14,7 +14,10 @@ import com.lifetrace.finance.automation.PendingShareStore
 import com.lifetrace.finance.automation.ProcessedImageStore
 import com.lifetrace.finance.data.Diagnostics
 import com.lifetrace.finance.data.FinanceDatabase
+import com.lifetrace.finance.domain.BookkeepingManager
 import com.lifetrace.finance.domain.FinanceRepository
+import com.lifetrace.finance.domain.LedgerSelectionStore
+import com.lifetrace.finance.importer.BillImportService
 import com.lifetrace.finance.network.LifeTraceApi
 import com.lifetrace.finance.network.SettingsStore
 import com.lifetrace.finance.platform.ScreenshotMonitorService
@@ -29,6 +32,9 @@ class AppGraph private constructor(context: Context) {
     val tokenStore = SecureTokenStore(app)
     val auth = AuthManager(app, api, tokenStore)
     val finance = FinanceRepository(db, auth.deviceId)
+    val ledgerSelection = LedgerSelectionStore(app)
+    val bookkeeping = BookkeepingManager(db, finance, auth.deviceId)
+    val billImport = BillImportService(db, finance, auth.deviceId)
     val syncEngine = SyncEngine(db, api, auth, diagnostics)
 
     // BeeCount-style image billing stack. The Vision request is made directly by Android.

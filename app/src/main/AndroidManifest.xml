@@ -32,6 +32,23 @@
         </activity>
 
         <activity
+            android:name=".ui.BookkeepingManagementActivity"
+            android:exported="true"
+            android:label="记账管理">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lifetrace-finance" android:host="bookkeeping" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".importer.BillImportActivity"
+            android:exported="false"
+            android:label="账单导入" />
+
+        <activity
             android:name=".ui.AiSettingsActivity"
             android:exported="true"
             android:label="智能截图记账设置">

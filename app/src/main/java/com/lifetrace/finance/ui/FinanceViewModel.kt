@@ -20,22 +20,31 @@ data class UiMessage(val text: String, val error: Boolean = false)
 class FinanceViewModel(application: Application) : AndroidViewModel(application) {
     private val graph = AppGraph.get(application)
     private val repo = graph.finance
+    private val manager = graph.bookkeeping
     private val _profile = MutableStateFlow<LocalProfileEntity?>(null)
     val profile = _profile.asStateFlow()
+    private val _selectedLedgerId = MutableStateFlow<String?>(null)
+    val selectedLedgerId = _selectedLedgerId.asStateFlow()
     private val _message = MutableStateFlow<UiMessage?>(null)
     val message = _message.asStateFlow()
     private val _authenticated = MutableStateFlow(graph.auth.currentUserId != null)
     val authenticated = _authenticated.asStateFlow()
     val smartCaptureState = graph.autoBilling.state
 
-    val transactions: StateFlow<List<TransactionEntity>> = _profile.filterNotNull()
-        .flatMapLatest { repo.transactions(it.id) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val inbox: StateFlow<List<TransactionEntity>> = _profile.filterNotNull()
-        .flatMapLatest { repo.inbox(it.id) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val accounts: StateFlow<List<AccountEntity>> = _profile.filterNotNull()
-        .flatMapLatest { repo.accounts(it.id) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val categories: StateFlow<List<CategoryEntity>> = _profile.filterNotNull()
-        .flatMapLatest { repo.categories(it.id) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val ledgers: StateFlow<List<LedgerEntity>> = _profile.filterNotNull()
+        .flatMapLatest { manager.ledgers(it.id) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val transactions: StateFlow<List<TransactionEntity>> = ledgerScoped { profileId, ledgerId -> manager.transactions(profileId, ledgerId) }
+    val accounts: StateFlow<List<AccountEntity>> = ledgerScoped { profileId, ledgerId -> manager.accounts(profileId, ledgerId) }
+    val categories: StateFlow<List<CategoryEntity>> = ledgerScoped { profileId, ledgerId -> manager.categories(profileId, ledgerId) }
+    val inbox: StateFlow<List<TransactionEntity>> = combine(_profile, _selectedLedgerId) { profile, ledgerId -> profile?.id to ledgerId }
+        .flatMapLatest { (profileId, ledgerId) ->
+            if (profileId == null || ledgerId == null) flowOf(emptyList())
+            else repo.inbox(profileId).map { rows -> rows.filter { it.ledgerId == ledgerId } }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     val pendingSync = graph.db.syncDao().pendingCount().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
     val conflicts = graph.db.syncDao().conflicts().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val conflictCount = graph.db.syncDao().conflictCount().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
@@ -46,14 +55,24 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         viewModelScope.launch {
-            val local = repo.ensureProfile()
-            _profile.value = local
+            var active = repo.ensureProfile()
+            _profile.value = active
+            selectInitialLedger(active)
             _authenticated.value = graph.auth.restore()
             if (_authenticated.value) {
-                graph.auth.currentUserId?.let { _profile.value = repo.activateCloudProfile(it) }
+                graph.auth.currentUserId?.let { active = repo.activateCloudProfile(it) }
+                _profile.value = active
+                selectInitialLedger(active)
                 SyncScheduler.scheduleNow(application)
             }
-            _profile.value?.let { repo.ensureStandardCategories(it.id) }
+            repo.ensureStandardCategories(active.id)
+        }
+        viewModelScope.launch {
+            combine(_profile.filterNotNull(), ledgers) { profile, rows -> profile to rows }.collect { (profile, rows) ->
+                if (rows.isEmpty()) return@collect
+                val current = _selectedLedgerId.value
+                if (current == null || rows.none { it.id == current }) selectLedger(rows.first().id, profile.id)
+            }
         }
         viewModelScope.launch {
             smartCaptureState.drop(1).collect { state ->
@@ -63,12 +82,39 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun <T> ledgerScoped(block: (String, String) -> Flow<List<T>>): StateFlow<List<T>> =
+        combine(_profile, _selectedLedgerId) { profile, ledgerId -> profile?.id to ledgerId }
+            .flatMapLatest { (profileId, ledgerId) ->
+                if (profileId == null || ledgerId == null) flowOf(emptyList()) else block(profileId, ledgerId)
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private suspend fun selectInitialLedger(profile: LocalProfileEntity) {
+        val default = repo.ensureDefaultLedger(profile.id)
+        val preferred = graph.ledgerSelection.selectedLedgerId(profile.id)
+        _selectedLedgerId.value = preferred ?: default.id
+    }
+
+    fun selectLedger(id: String) {
+        val profileId = _profile.value?.id ?: return
+        selectLedger(id, profileId)
+    }
+
+    private fun selectLedger(id: String, profileId: String) {
+        _selectedLedgerId.value = id
+        graph.ledgerSelection.select(profileId, id)
+    }
+
     fun save(type: TransactionType, amountText: String, accountId: String?, toAccountId: String? = null, categoryId: String? = null, merchant: String? = null, note: String? = null) {
         val amount = MoneyParser.parseCents(amountText)
         if (amount == null || amount <= 0) { _message.value = UiMessage("请输入有效金额", true); return }
         val profileId = _profile.value?.id ?: return
+        val ledgerId = _selectedLedgerId.value ?: return
+        if (accountId != null && accounts.value.none { it.id == accountId }) { _message.value = UiMessage("付款账户不属于当前账本", true); return }
+        if (toAccountId != null && accounts.value.none { it.id == toAccountId }) { _message.value = UiMessage("转入账户不属于当前账本", true); return }
+        if (categoryId != null && categories.value.none { it.id == categoryId }) { _message.value = UiMessage("分类不属于当前账本", true); return }
         viewModelScope.launch {
-            runCatching { repo.createTransaction(profileId, type, amount, accountId, toAccountId, categoryId, merchant, note) }
+            runCatching { repo.createTransaction(profileId, type, amount, accountId, toAccountId, categoryId, merchant, note, ledgerId = ledgerId) }
                 .onSuccess { _message.value = UiMessage("已保存，本地立即生效"); SyncScheduler.scheduleNow(getApplication()) }
                 .onFailure { _message.value = UiMessage(it.message ?: "保存失败", true) }
         }
@@ -77,6 +123,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun updateTransaction(id: String, amountText: String, categoryId: String?, merchant: String?, note: String?) {
         val cents = MoneyParser.parseCents(amountText)
         if (cents == null || cents <= 0) { _message.value = UiMessage("请输入有效金额", true); return }
+        if (categoryId != null && categories.value.none { it.id == categoryId }) { _message.value = UiMessage("分类不属于当前账本", true); return }
         viewModelScope.launch {
             runCatching { repo.updateTransaction(id, cents, categoryId, merchant, note) }
                 .onSuccess { _message.value = UiMessage("账单已更新"); SyncScheduler.scheduleNow(getApplication()) }
@@ -94,12 +141,16 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun ignore(id: String) = viewModelScope.launch { repo.ignoreCandidate(id); SyncScheduler.scheduleNow(getApplication()) }
 
     fun addAccount(name: String, type: String) = viewModelScope.launch {
-        _profile.value?.let { repo.createAccount(it.id, name, type); SyncScheduler.scheduleNow(getApplication()) }
+        val profileId = _profile.value?.id ?: return@launch
+        val ledgerId = _selectedLedgerId.value ?: return@launch
+        runCatching { manager.createAccount(profileId, ledgerId, name, type) }
+            .onSuccess { SyncScheduler.scheduleNow(getApplication()) }
+            .onFailure { _message.value = UiMessage(it.message ?: "账户创建失败", true) }
     }
 
     fun archiveAccount(id: String) {
         if (accounts.value.size <= 1) {
-            _message.value = UiMessage("至少保留一个可用账户", true)
+            _message.value = UiMessage("当前账本至少保留一个可用账户", true)
             return
         }
         viewModelScope.launch {
@@ -110,11 +161,15 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun addCategory(name: String, type: TransactionType) = viewModelScope.launch {
-        _profile.value?.let { repo.createCategory(it.id, name, type); SyncScheduler.scheduleNow(getApplication()) }
+        val profileId = _profile.value?.id ?: return@launch
+        val ledgerId = _selectedLedgerId.value ?: return@launch
+        runCatching { manager.createCategory(profileId, ledgerId, name, type) }
+            .onSuccess { SyncScheduler.scheduleNow(getApplication()) }
+            .onFailure { _message.value = UiMessage(it.message ?: "分类创建失败", true) }
     }
 
     fun archiveCategory(id: String) = viewModelScope.launch {
-        runCatching { repo.archiveCategory(id) }
+        runCatching { manager.archiveCategory(id) }
             .onSuccess { _message.value = UiMessage("分类已归档，历史账单仍保留"); SyncScheduler.scheduleNow(getApplication()) }
             .onFailure { _message.value = UiMessage(it.message ?: "分类归档失败", true) }
     }
@@ -126,6 +181,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             repo.activateCloudProfile(cloudUserId)
         }.onSuccess { profile ->
             _profile.value = profile
+            selectInitialLedger(profile)
             repo.ensureStandardCategories(profile.id)
             _authenticated.value = true
             _message.value = UiMessage("登录成功")

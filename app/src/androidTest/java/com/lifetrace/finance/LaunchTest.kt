@@ -51,12 +51,14 @@ class LaunchTest {
         val graph = AppGraph.get(rule.activity.application)
         runBlocking {
             val profile = graph.finance.ensureProfile()
+            val ledger = graph.finance.ensureDefaultLedger(profile.id)
             val accountId = graph.finance.createAccount(profile.id, "回归测试招商银行", "bank")
             val now = Instant.now().toString()
             graph.db.financeDao().upsertTransaction(
                 TransactionEntity(
                     id = "instrumentation-synced-details",
                     localProfileId = profile.id,
+                    ledgerId = ledger.id,
                     transactionType = "expense",
                     amountCents = 2580,
                     accountId = accountId,
