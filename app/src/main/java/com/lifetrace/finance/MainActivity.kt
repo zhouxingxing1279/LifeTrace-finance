@@ -10,9 +10,9 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lifetrace.finance.sync.RecurringScheduler
 import com.lifetrace.finance.sync.SyncScheduler
+import com.lifetrace.finance.ui.BeeCountFinanceApp
 import com.lifetrace.finance.ui.FinanceViewModel
 import com.lifetrace.finance.ui.LedgerContextBar
-import com.lifetrace.finance.ui.LifeTraceFinanceApp
 import com.lifetrace.finance.ui.LifeTraceTheme
 
 class MainActivity : ComponentActivity() {
@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
                 Column {
                     LedgerContextBar(vm)
                     Box(Modifier.weight(1f)) {
-                        LifeTraceFinanceApp(
+                        BeeCountFinanceApp(
                             vm,
                             initialDestination = initial,
                             sharedText = sharedText,
