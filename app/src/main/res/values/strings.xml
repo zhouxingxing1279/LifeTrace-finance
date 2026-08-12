@@ -4,4 +4,5 @@
     <string name="shortcut_income">记收入</string>
     <string name="shortcut_transfer">转账</string>
     <string name="shortcut_inbox">待确认</string>
+    <string name="shortcut_smart_capture_settings">智能记账设置</string>
 </resources>

@@ -12,4 +12,7 @@
     <shortcut android:shortcutId="inbox" android:enabled="true" android:icon="@drawable/ic_lifetrace" android:shortcutShortLabel="@string/shortcut_inbox">
         <intent android:action="android.intent.action.VIEW" android:targetPackage="com.lifetrace.finance" android:targetClass="com.lifetrace.finance.MainActivity" android:data="lifetrace-finance://inbox" />
     </shortcut>
+    <shortcut android:shortcutId="smart_capture_settings" android:enabled="true" android:icon="@drawable/ic_lifetrace" android:shortcutShortLabel="@string/shortcut_smart_capture_settings">
+        <intent android:action="android.intent.action.APPLICATION_PREFERENCES" android:targetPackage="com.lifetrace.finance" android:targetClass="com.lifetrace.finance.ui.AiSettingsActivity" />
+    </shortcut>
 </shortcuts>

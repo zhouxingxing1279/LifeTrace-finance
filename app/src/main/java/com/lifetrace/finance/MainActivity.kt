@@ -14,6 +14,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         SyncScheduler.ensurePeriodic(this)
+        AppGraph.get(this).screenshotMonitor.restore()
         val shortcutHost = intent?.data?.host
         val shortcutType = intent?.data?.pathSegments?.firstOrNull()
         val initial = intent?.getStringExtra("destination") ?: if (shortcutHost == "inbox") "inbox" else "quick"
