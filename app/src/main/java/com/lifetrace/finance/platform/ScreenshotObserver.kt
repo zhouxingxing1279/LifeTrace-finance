@@ -38,7 +38,7 @@ class ScreenshotObserver(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) add(MediaStore.Images.Media.RELATIVE_PATH)
             else add(MediaStore.Images.Media.DATA)
         }.toTypedArray()
-        val sort = if (target == MediaStore.Images.Media.EXTERNAL_CONTENT_URI) "${MediaStore.Images.Media.DATE_ADDED} DESC LIMIT 1" else null
+        val sort = if (target == MediaStore.Images.Media.EXTERNAL_CONTENT_URI) "${MediaStore.Images.Media.DATE_ADDED} DESC" else null
         return runCatching {
             resolver.query(target, projection, null, null, sort)?.use { cursor ->
                 if (!cursor.moveToFirst()) return@use null
