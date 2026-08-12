@@ -24,6 +24,13 @@ class LaunchTest {
         rule.onNodeWithTag("quick_amount").assertIsDisplayed()
     }
 
+    @Test fun advancedBookkeepingEntriesAreAlwaysVisible() {
+        rule.onNodeWithText("记账管理").assertIsDisplayed()
+        rule.onNodeWithText("账单导入").assertIsDisplayed()
+        rule.onNodeWithText("AI 设置").assertIsDisplayed()
+        rule.onNodeWithText("v0.2.0").assertIsDisplayed()
+    }
+
     @Test fun quickExpenseCommitsWithinThreeSecondsOnceReady() {
         rule.waitUntil(10_000) {
             runCatching {
