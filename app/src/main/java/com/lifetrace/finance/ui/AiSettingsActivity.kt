@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -99,30 +100,30 @@ class AiSettingsActivity : ComponentActivity() {
 
                     Button(
                         onClick = {
-                            runCatching {
+                            val saveError = runCatching {
                                 graph.aiSettings.baseUrl = baseUrl
                                 graph.aiSettings.visionModel = model
                                 if (apiKey.isNotBlank()) graph.aiSecrets.saveApiKey(apiKey)
                                 require(graph.aiSecrets.hasApiKey()) { "请填写 API Key" }
                                 if (!monitorEnabled) graph.screenshotMonitor.stop()
-                            }.onFailure {
-                                error = it.message ?: "保存失败"
-                                return@Button
-                            }
-
-                            if (monitorEnabled) {
-                                if (graph.screenshotMonitor.hasMediaPermission()) graph.screenshotMonitor.start()
-                                else permissionLauncher.launch(graph.screenshotMonitor.requiredPermission())
-                            }
-                            pendingImagePath?.let { path ->
-                                graph.autoBilling.submitImage(Uri.fromFile(File(path)), "share_receiver", deleteAfter = true)
-                            }
-                            message = "Vision 配置已保存"
-                            error = null
-                            if (pendingImagePath == null) finish()
-                            else {
-                                startActivity(android.content.Intent(this@AiSettingsActivity, com.lifetrace.finance.MainActivity::class.java).putExtra("destination", "inbox"))
-                                finish()
+                            }.exceptionOrNull()
+                            if (saveError != null) {
+                                error = saveError.message ?: "保存失败"
+                            } else {
+                                if (monitorEnabled) {
+                                    if (graph.screenshotMonitor.hasMediaPermission()) graph.screenshotMonitor.start()
+                                    else permissionLauncher.launch(graph.screenshotMonitor.requiredPermission())
+                                }
+                                pendingImagePath?.let { path ->
+                                    graph.autoBilling.submitImage(Uri.fromFile(File(path)), "share_receiver", deleteAfter = true)
+                                }
+                                message = "Vision 配置已保存"
+                                error = null
+                                if (pendingImagePath == null) finish()
+                                else {
+                                    startActivity(android.content.Intent(this@AiSettingsActivity, com.lifetrace.finance.MainActivity::class.java).putExtra("destination", "inbox"))
+                                    finish()
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
