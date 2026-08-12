@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import com.lifetrace.finance.AppGraph
 import com.lifetrace.finance.MainActivity
+import com.lifetrace.finance.ui.AiSettingsActivity
 import java.io.File
 import java.util.UUID
 
@@ -27,7 +28,16 @@ class ShareReceiverActivity : Activity() {
                 val uri = intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
                 if (uri != null) {
                     val cached = cacheSharedFile(uri)
-                    AppGraph.get(applicationContext).autoBilling.submitImage(
+                    val graph = AppGraph.get(applicationContext)
+                    if (!graph.aiProviderFactory.isVisionConfigured()) {
+                        startActivity(
+                            Intent(this, AiSettingsActivity::class.java)
+                                .putExtra(AiSettingsActivity.EXTRA_PENDING_IMAGE_PATH, cached.absolutePath),
+                        )
+                        finish()
+                        return
+                    }
+                    graph.autoBilling.submitImage(
                         Uri.fromFile(cached),
                         source = "share_receiver",
                         deleteAfter = true,
