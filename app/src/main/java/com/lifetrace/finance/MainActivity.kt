@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.lifetrace.finance.sync.RecurringScheduler
 import com.lifetrace.finance.sync.SyncScheduler
 import com.lifetrace.finance.ui.FinanceViewModel
 import com.lifetrace.finance.ui.LifeTraceFinanceApp
@@ -14,6 +15,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         SyncScheduler.ensurePeriodic(this)
+        RecurringScheduler.ensurePeriodic(this)
+        RecurringScheduler.scheduleNow(this)
         AppGraph.get(this).screenshotMonitor.restore()
         val shortcutHost = intent?.data?.host
         val shortcutType = intent?.data?.pathSegments?.firstOrNull()
