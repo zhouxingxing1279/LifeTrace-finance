@@ -27,14 +27,16 @@ object PromptBuilder {
             - merchant: 商户/交易对方，无法判断时 null。
             - item: 商品或服务的简短描述，无法判断时 null。
             - occurredAt: 图片明确显示或可以可靠确定时返回 RFC3339 时间，否则 null。
-            - account: 优先从“用户已有账户”选择最匹配名称；无法确定则返回图片中的付款方式/账户提示；都没有则 null。
-            - category: 优先从“用户已有分类”选择最匹配名称；无法可靠分类则 null。
+            - account: 非转账时的付款/收款账户；优先从用户已有账户选择，无法确定则返回图片中的账户提示，否则 null。
+            - fromAccount: 仅 transfer 使用，转出账户；优先从用户已有账户选择，否则 null。
+            - toAccount: 仅 transfer 使用，转入账户；优先从用户已有账户选择，否则 null。
+            - category: 优先从用户已有分类选择最匹配名称；无法可靠分类则 null。transfer 应返回 null。
             - externalTransactionId: 仅在交易号/订单号清晰可见时填写，否则 null。
             - confidence: 0 到 1。
 
             示例：
             []
-            [{"amountCents":2850,"currency":"CNY","type":"expense","merchant":"瑞幸咖啡","item":null,"occurredAt":"2026-08-12T09:30:00+08:00","account":"招商银行储蓄卡","category":"餐饮","externalTransactionId":null,"confidence":0.95}]
+            [{"amountCents":2850,"currency":"CNY","type":"expense","merchant":"瑞幸咖啡","item":null,"occurredAt":"2026-08-12T09:30:00+08:00","account":"招商银行储蓄卡","fromAccount":null,"toAccount":null,"category":"餐饮","externalTransactionId":null,"confidence":0.95}]
         """.trimIndent()
     }
 }
