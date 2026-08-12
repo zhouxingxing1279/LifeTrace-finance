@@ -22,6 +22,7 @@ class LaunchTest {
     @Test fun appLaunchesIntoBeeCountBills() {
         rule.onNodeWithText("蜜蜂账本").assertIsDisplayed()
         rule.onNodeWithTag("transaction_search").assertIsDisplayed()
+        rule.onNodeWithContentDescription("记一笔").assertIsDisplayed()
     }
 
     @Test fun advancedBookkeepingEntriesRemainReachable() {
@@ -34,10 +35,11 @@ class LaunchTest {
     @Test fun quickExpenseCommitsWithinThreeSecondsOnceReady() {
         rule.onNodeWithContentDescription("记一笔").performClick()
         rule.waitUntil(10_000) {
-            runCatching {
-                rule.onNodeWithTag("quick_save").assertIsDisplayed()
-                true
-            }.getOrDefault(false)
+            rule.onAllNodesWithTag("entry_first_category").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("entry_first_category").performClick()
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithTag("quick_save").fetchSemanticsNodes().isNotEmpty()
         }
         val started = SystemClock.elapsedRealtime()
         rule.onNodeWithText("1").performClick()
@@ -56,7 +58,7 @@ class LaunchTest {
         rule.onNodeWithText("图表").performClick()
         rule.onNodeWithText("图表分析").assertIsDisplayed()
         rule.onNodeWithText("账本").performClick()
-        rule.onNodeWithText("账户总览").assertIsDisplayed()
+        rule.onNodeWithText("账户").assertIsDisplayed()
     }
 
     @Test fun syncedBillShowsImportedItemAndPaymentAccount() {
