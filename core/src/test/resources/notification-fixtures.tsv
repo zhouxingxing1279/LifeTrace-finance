@@ -1,6 +1,0 @@
-# package|title|text|expected cents or -
-com.tencent.mm|微信支付|向星巴克支付成功 ￥25.80|2580
-com.eg.android.AlipayGphone|支付宝|付款成功 36.00元 商户：便利店|3600
-com.bank.demo|银行卡|尾号 1234 消费 108.50 元|10850
-com.tencent.mm|张三|晚上一起吃饭吗|-
-com.eg.android.AlipayGphone|优惠活动|支付立减优惠 20 元|-
